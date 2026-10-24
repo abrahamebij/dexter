@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --canvas: hsl(42 28% 94%);
+  --ink: hsl(84 9% 13%);
+  --muted: hsl(75 7% 42%);
+  --subtle: hsl(75 6% 48%);
+  --panel: hsl(45 23% 90%);
+  --line: hsl(43 16% 84%);
+  --line-strong: hsl(42 15% 80%);
+  --accent: hsl(83 35% 39%);
+  --accent-strong: hsl(84 38% 45%);
+  --accent-soft: hsl(80 38% 86%);
+  --dark-line: hsl(78 6% 29%);
+  color: var(--ink);
+  background: var(--canvas);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
+  --color-panel: var(--panel);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+  --color-dark-line: var(--dark-line);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: var(--canvas);
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+}
