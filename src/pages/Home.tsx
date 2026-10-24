@@ -1,5 +1,7 @@
 import { useRef } from 'react'
-import { Link } from 'react-router'
+import { Link, useNavigate } from 'react-router'
+import { ConnectKitButton } from 'connectkit'
+import { useAccount } from 'wagmi'
 import { useGSAP } from '@gsap/react'
 import gsap from 'gsap'
 import { ScrollTrigger } from 'gsap/ScrollTrigger'
@@ -26,6 +28,28 @@ const steps = [
 ]
 
 const principles = ['Deterministic rules', 'Delegated permissions', 'Auditable actions']
+
+function WalletAction({ compact = false }: { compact?: boolean }) {
+  const navigate = useNavigate()
+  const { isConnected } = useAccount()
+
+  return (
+    <ConnectKitButton.Custom>
+      {({ show }) => (
+        <button
+          type="button"
+          onClick={() => (isConnected ? navigate('/app') : show?.())}
+          className={compact
+            ? 'nav-item group flex items-center gap-2 text-sm font-medium'
+            : 'group inline-flex items-center gap-3 rounded-full bg-ink px-6 py-3.5 text-sm font-medium text-canvas transition-transform hover:-translate-y-0.5'}
+        >
+          {compact ? 'Launch app' : 'Create your first guard'}
+          <FiArrowUpRight className="transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+        </button>
+      )}
+    </ConnectKitButton.Custom>
+  )
+}
 
 export default function Home() {
   const page = useRef<HTMLDivElement>(null)
@@ -69,10 +93,7 @@ export default function Home() {
           <a className="nav-item transition-colors hover:text-ink" href="#principles">Principles</a>
           <a className="nav-item transition-colors hover:text-ink" href="#start">Get started</a>
         </div>
-        <a href="#start" className="nav-item group flex items-center gap-2 text-sm font-medium">
-          Launch app
-          <FiArrowUpRight className="transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-        </a>
+        <WalletAction compact />
       </nav>
 
       <section className="mx-auto grid w-full max-w-7xl items-center gap-16 px-6 pb-24 pt-20 lg:grid-cols-[1.08fr_0.92fr] lg:px-10 lg:pb-36 lg:pt-28">
@@ -86,10 +107,7 @@ export default function Home() {
             Dexter watches your position the way you would, if you never had to sleep. Describe a rule, set the boundary, and keep your downside deliberate.
           </p>
           <div className="hero-copy mt-10 flex flex-wrap items-center gap-5">
-            <a href="#start" className="group inline-flex items-center gap-3 rounded-full bg-ink px-6 py-3.5 text-sm font-medium text-canvas transition-transform hover:-translate-y-0.5">
-              Create your first guard
-              <FiArrowUpRight className="transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-            </a>
+            <WalletAction />
             <a href="#how-it-works" className="inline-flex items-center gap-2 text-sm font-medium text-muted transition-colors hover:text-ink">
               See how it works
               <FiChevronDown />
