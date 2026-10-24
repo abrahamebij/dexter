@@ -126,7 +126,7 @@ export default function Home() {
               </div>
             </div>
           </div>
-          <div className="absolute -bottom-7 -left-3 flex items-center gap-3 rounded-2xl border border-line bg-canvas px-4 py-3 shadow-[0_12px_35px_rgba(32,35,30,0.06)] sm:-left-8">
+          <div className="absolute -bottom-7 -left-3 flex items-center gap-3 rounded-2xl border border-line bg-canvas px-4 py-3 shadow-sm sm:-left-8">
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-accent-soft text-accent"><FiShield /></span>
             <div>
               <p className="text-xs text-subtle">Permissioned action</p>
