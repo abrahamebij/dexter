@@ -45,7 +45,7 @@ const EVENTS_FILE = `${DATA_DIR}events.json`
 const DRY_RUN = process.env.DRY_RUN !== 'false'
 const POLL_MS = 5_000
 const GEMINI_DOCS_URL = 'https://ai.google.dev/gemini-api/docs/models'
-const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash'
+const DEFAULT_GEMINI_MODEL = 'gemini-3.1-flash-lite'
 const delegatedOrderAbi = parseAbi([
   'function placeOrderFor(address owner, bool isBid, uint64 userData, uint256 price, uint256 quantity, uint64 expireTimestampNs, uint8 orderType, uint8 selfMatchingOption, address builder, uint96 builderFeeBpsTimes1k)',
 ])
@@ -77,6 +77,14 @@ type EventRecord = {
   explorer?: string
   before?: PositionSnapshot
   after?: PositionSnapshot
+  triggerValues?: { markPrice?: string; liquidationPrice?: string | null; thresholdPct?: number; direction?: string; targetPrice?: number; triggered?: boolean }
+  positionSizeBefore?: string
+  computedCloseQuantity?: string | null
+  priceUsed?: string | null
+  expireTimestampNs?: string | null
+  simulationResult?: string
+  simulationError?: string
+  dryRun?: boolean
 }
 type PositionSnapshot = { size: string; side: string; entryPrice: string; liquidationPrice: string | null }
 type ProofClient = SomniaMarketsClient & {
@@ -446,12 +454,15 @@ async function main(): Promise<void> {
       const hit = triggered(guard, mark, liquidationNumber)
       console.log(`POLL/EVAL guard=${guard.id} owner=${guard.owner} market=${guard.market} reason=${reason} mark=${mark} feed=${json(feed)} margin=${json(margin)} triggered=${hit}`)
       if (!hit || inCooldown(guard)) return
-      await eventLog({ timestamp: new Date().toISOString(), kind: 'trigger_hit', guardId: guard.id, owner: guard.owner, market: guard.market, reason, before })
+      const triggerValues = guard.trigger.type === 'mark_price'
+        ? { markPrice: mark.toString(), direction: guard.trigger.direction, targetPrice: guard.trigger.price, triggered: hit }
+        : { markPrice: mark.toString(), liquidationPrice: liquidationNumber === null ? null : liquidationNumber.toString(), thresholdPct: guard.trigger.thresholdPct, triggered: hit }
+      await eventLog({ timestamp: new Date().toISOString(), kind: 'trigger_hit', guardId: guard.id, owner: guard.owner, market: guard.market, reason, before, triggerValues, positionSizeBefore: position.size.toString(), dryRun: DRY_RUN })
       if (inFlight.has(guard.id)) return
       inFlight.add(guard.id)
       try {
         if (guard.action.type === 'notify_only') {
-          await eventLog({ timestamp: new Date().toISOString(), kind: 'simulated', guardId: guard.id, owner: guard.owner, market: guard.market, reason: 'notify_only action; no transaction required', before })
+          await eventLog({ timestamp: new Date().toISOString(), kind: 'simulated', guardId: guard.id, owner: guard.owner, market: guard.market, reason: 'notify_only action; no transaction required', before, triggerValues, positionSizeBefore: position.size.toString(), computedCloseQuantity: null, priceUsed: null, expireTimestampNs: null, simulationResult: 'not_applicable', dryRun: DRY_RUN })
           return
         }
         await executePartialClose(guard, market, position, before, client, publicClient, inFlight)
@@ -605,8 +616,15 @@ async function executePartialClose(
     account: botAccount,
   }
   console.log(`Guard close args: ${json({ owner: guard.owner, isBid, quantity: closeQuantity, price, expiry, blockTimestamp: block.timestamp, orderType: ORDER_TYPE.MARKET, selfMatchingOption: SELF_MATCHING_OPTION.CANCEL_TAKER })}`)
-  const simulation = await bot.simulateContract(request)
-  await eventLog({ timestamp: new Date().toISOString(), kind: 'simulated', guardId: guard.id, owner: guard.owner, market: guard.market, reason: `DRY_RUN=${DRY_RUN}; simulation passed`, before })
+  let simulation: Awaited<ReturnType<typeof bot.simulateContract>>
+  try {
+    simulation = await bot.simulateContract(request)
+  } catch (error) {
+    const simulationError = text(error)
+    await eventLog({ timestamp: new Date().toISOString(), kind: 'simulation_failed', guardId: guard.id, owner: guard.owner, market: guard.market, reason: 'eth_call simulation reverted or failed', before, positionSizeBefore: current.size.toString(), computedCloseQuantity: closeQuantity.toString(), priceUsed: price.toString(), expireTimestampNs: expiry.toString(), simulationError, dryRun: DRY_RUN })
+    throw error
+  }
+  await eventLog({ timestamp: new Date().toISOString(), kind: 'simulated', guardId: guard.id, owner: guard.owner, market: guard.market, reason: `DRY_RUN=${DRY_RUN}; simulation passed`, before, positionSizeBefore: current.size.toString(), computedCloseQuantity: closeQuantity.toString(), priceUsed: price.toString(), expireTimestampNs: expiry.toString(), simulationResult: 'success', dryRun: DRY_RUN })
   if (DRY_RUN) {
     const botRpc = await botTransport({ chain: hidekiTestnet }).value?.getRpcClient()
     botRpc?.close()
@@ -665,7 +683,7 @@ async function handleHttp(
         const liquidationPrice = await readRetry(`client.getLiquidationPrice(${market.poolAddress}, ${owner})`, () => client.getLiquidationPrice({ marginBank: market.marginBank, account: owner, pool: market.poolAddress }))
         const margin = await readRetry(`client.getMarginAccount(${market.marginBank}, ${owner})`, () => client.getMarginAccount(market.marginBank, owner))
         const markPrice = analytics.priceable ? analytics.markPrice : 0n
-        const distance = liquidationPrice !== null && markPrice > 0n ? Number(((liquidationPrice > markPrice ? liquidationPrice - markPrice : markPrice - liquidationPrice) * 10_000n) / markPrice) / 100 : null
+        const distance = liquidationPrice !== null && liquidationPrice > 0n && markPrice > 0n ? Number(((liquidationPrice > markPrice ? liquidationPrice - markPrice : markPrice - liquidationPrice) * 10_000n) / markPrice) / 100 : null
         positions.push({
           market: marketName(market),
           pool: market.poolAddress,
@@ -675,7 +693,9 @@ async function handleHttp(
           entryPrice: formatUnits(position.avgEntryPrice, 18),
           markPrice: analytics.priceable ? formatUnits(analytics.markPrice, 18) : null,
           margin: formatUnits(margin.equity, market.quoteDecimals),
-          liquidationPrice: liquidationPrice === null ? null : formatUnits(liquidationPrice, 18),
+          liquidationPrice: liquidationPrice === null || liquidationPrice === 0n ? null : formatUnits(liquidationPrice, 18),
+          liquidationPriceRaw: liquidationPrice?.toString() ?? null,
+          liquidationPriceDisplay: liquidationPrice === null || liquidationPrice === 0n ? 'Not available' : formatUnits(liquidationPrice, 18),
           liquidationDistancePct: distance,
           unrealizedPnl: analytics.priceable ? formatUnits(analytics.unrealizedPnl, market.quoteDecimals) : null,
           asOfBlock: analytics.asOfBlock.toString(),
