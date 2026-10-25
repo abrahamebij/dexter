@@ -1,4 +1,4 @@
-import { getAddress, type Address, type Hex } from 'viem'
+import { getAddress, hashMessage, recoverAddress, type Address, type Hex } from 'viem'
 import { createPublicClient } from 'viem'
 import type { IncomingMessage } from 'node:http'
 import { badRequest, nonces, type AuthPayload, type NonceRecord } from './shared.js'
@@ -40,8 +40,14 @@ export async function verifyAuth(request: IncomingMessage, publicClient: ReturnT
     throw badRequest('message must contain Dexter, owner, nonce and expiry')
   }
   if (Number(expiryMatch[1]) <= Date.now()) throw badRequest('message is expired')
+  const digest = hashMessage(auth.message)
+  let recovered: Address | null = null
+  try { recovered = await recoverAddress({ hash: digest, signature: auth.signature }) } catch {}
   const valid = await publicClient.verifyMessage({ address: auth.owner, message: auth.message, signature: auth.signature })
-  if (!valid) throw badRequest('signature verification failed')
+  if (!valid) {
+    const recoveredText = recovered ? ` Connected signer recovered as ${recovered}, but the requested owner is ${auth.owner}.` : ''
+    throw badRequest(`signature verification failed.${recoveredText} Sign with the connected wallet that controls the requested DreamDEX owner.`)
+  }
   nonces.delete(auth.owner.toLowerCase())
   return auth.owner
 }
