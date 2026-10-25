@@ -121,6 +121,7 @@ async function main(): Promise<void> {
   }
 
   const owner = getAddress(requiredEnv('OWNER_ADDRESS'))
+  console.log(`OWNER_ADDRESS from server/.env: ${owner}`)
   const createClient = await loadClientFactory()
   const client = createClient({
     chain: hidekiTestnet,
@@ -131,23 +132,30 @@ async function main(): Promise<void> {
 
   console.log(`Read-only SDK client connected to chain ${hidekiTestnet.id}`)
   console.log('SDK methods used for market/system reads: client.listPerpMarkets(), client.getPerpSystemConfig(marginBank)')
+  console.log('SDK call client.listPerpMarkets(): no owner/account address')
   const markets = (await client.listPerpMarkets()).filter((market): market is ProofMarket => market.marketType === 'PERP')
   if (markets.length === 0) throw new Error('SDK returned no perp markets')
 
   for (const market of markets) {
     printMarket(market)
+    console.log(`SDK call client.getPerpSystemConfig(marginBank): marginBank=${market.marginBank}`)
     const config = await client.getPerpSystemConfig(market.marginBank)
     console.log('System config:', JSON.stringify(config, (_, value) => typeof value === 'bigint' ? value.toString() : value, 2))
   }
 
   console.log('SDK methods used for account reads: client.listPerpPositions(owner), client.getPerpPosition({ marginBank, account, pool }), client.getMarginAccount(marginBank, owner), client.getLiquidationPrice({ marginBank, account, pool })')
+  console.log(`SDK call client.listPerpPositions(owner): owner=${owner}`)
   const indexedPositions = await client.listPerpPositions(owner)
   const livePositions = []
   for (const market of markets) {
+    console.log(`SDK call client.getPerpPosition({ marginBank, account, pool }): account=${owner}, marginBank=${market.marginBank}, pool=${market.poolAddress}`)
     const position = await client.getPerpPosition({ marginBank: market.marginBank, account: owner, pool: market.poolAddress })
-    const liquidationPrice = position.size === 0n
-      ? null
-      : await client.getLiquidationPrice({ marginBank: market.marginBank, account: owner, pool: market.poolAddress })
+    let liquidationPrice: bigint | null = null
+    if (position.size !== 0n) {
+      console.log(`SDK call client.getLiquidationPrice({ marginBank, account, pool }): account=${owner}, marginBank=${market.marginBank}, pool=${market.poolAddress}`)
+      liquidationPrice = await client.getLiquidationPrice({ marginBank: market.marginBank, account: owner, pool: market.poolAddress })
+    }
+    console.log(`SDK call client.getMarginAccount(marginBank, account): account=${owner}, marginBank=${market.marginBank}`)
     const margin = await client.getMarginAccount(market.marginBank, owner)
     if (position.size !== 0n || indexedPositions.some((row) => row.pool.toLowerCase() === market.poolAddress.toLowerCase())) {
       const entry = {
@@ -171,11 +179,14 @@ async function main(): Promise<void> {
   }
   console.log(`Indexer rows returned: ${indexedPositions.length}`)
 
-  if (PROOF_MODE === 'read') return
-
   const configuredBotKey = requiredEnv('BOT_PRIVATE_KEY')
   const botKey = (configuredBotKey.startsWith('0x') ? configuredBotKey : `0x${configuredBotKey}`) as Hex
   const botAccount = privateKeyToAccount(botKey)
+  console.log(`Bot address derived from BOT_PRIVATE_KEY: ${botAccount.address}`)
+  console.log(`Owner and bot addresses are different: ${owner !== botAccount.address}; owner is OWNER_ADDRESS from server/.env: ${owner === getAddress(requiredEnv('OWNER_ADDRESS'))}`)
+
+  if (PROOF_MODE === 'read') return
+
   const bot = createWalletClient({
     account: botAccount,
     chain: hidekiTestnet,
@@ -200,6 +211,7 @@ async function main(): Promise<void> {
     const topPrice = raw(top.price)
     const slippageBps = BigInt(process.env.PROOF_SLIPPAGE_BPS ?? '100')
     const crossedPrice = isBid ? alignUp(topPrice * (10_000n + slippageBps) / 10_000n, tickSize) : alignDown(topPrice * (10_000n - slippageBps) / 10_000n, tickSize)
+    console.log(`SDK call client.getMaxPerpOrderSize({ pool, marginBank, account, isBid, price }): account=${owner}, marginBank=${market.marginBank}, pool=${market.poolAddress}`)
     const max = await client.getMaxPerpOrderSize({ pool: market.poolAddress, marginBank: market.marginBank, account: owner, isBid, price: crossedPrice })
     console.log('SDK method used for sizing: client.getMaxPerpOrderSize({ pool, marginBank, account, isBid, price })')
     console.log('Max order size:', JSON.stringify(max, (_, value) => typeof value === 'bigint' ? value.toString() : value, 2))
