@@ -30,7 +30,7 @@ export default function AppShell() {
       <header className="border-b border-line">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-5 lg:px-10">
           <NavLink to="/" className="flex items-center gap-2 text-lg font-semibold tracking-[-0.04em]">
-            <img src="/favicon.svg" alt="" className="h-7 w-7" />
+            <img src="/logo.png" alt="" className="h-7 w-7" />
             dexter
           </NavLink>
           <div className="flex items-center gap-4">
