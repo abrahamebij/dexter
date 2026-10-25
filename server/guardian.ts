@@ -43,6 +43,8 @@ const GUARDS_FILE = `${DATA_DIR}guards.json`
 const EVENTS_FILE = `${DATA_DIR}events.json`
 const DRY_RUN = process.env.DRY_RUN !== 'false'
 const POLL_MS = 5_000
+const GEMINI_DOCS_URL = 'https://ai.google.dev/gemini-api/docs/models'
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash'
 const delegatedOrderAbi = parseAbi([
   'function placeOrderFor(address owner, bool isBid, uint64 userData, uint256 price, uint256 quantity, uint64 expireTimestampNs, uint8 orderType, uint8 selfMatchingOption, address builder, uint96 builderFeeBpsTimes1k)',
 ])
@@ -79,6 +81,16 @@ type PositionSnapshot = { size: string; side: string; entryPrice: string; liquid
 type ProofClient = SomniaMarketsClient & {
   listPerpMarkets: (options?: { baseSymbol?: string; quoteSymbol?: string; limit?: number }) => Promise<PerpMarket[]>
 }
+type AuthPayload = { message: string; signature: Hex; owner: Address }
+type CompiledRule = {
+  market: string
+  trigger: Trigger
+  action: Action
+  cooldownSeconds: number
+}
+type NonceRecord = { nonce: string; owner: Address; expiresAt: number }
+const nonces = new Map<string, NonceRecord>()
+const compileRate = new Map<string, number[]>()
 
 const watchedNames = new Set([
   'PositionUpdated', 'FundingSettled', 'Deposited', 'DepositedFor', 'Withdrawn',
@@ -119,6 +131,176 @@ function topic0(entry: { name: string; inputs: readonly { type: string }[] }): H
 
 function json(value: unknown): string {
   return JSON.stringify(value, (_, item) => typeof item === 'bigint' ? item.toString() : item, 2)
+}
+
+function badRequest(message: string): Error {
+  return new Error(`BAD_REQUEST: ${message}`)
+}
+
+function parseJsonBody(request: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    let body = ''
+    request.on('data', (chunk: Buffer) => {
+      body += chunk.toString('utf8')
+      if (body.length > 100_000) reject(badRequest('request body is too large'))
+    })
+    request.on('end', () => {
+      try {
+        resolve(body ? JSON.parse(body) : {})
+      } catch {
+        reject(badRequest('request body must be valid JSON'))
+      }
+    })
+    request.on('error', reject)
+  })
+}
+
+function parseAuth(request: IncomingMessage): AuthPayload {
+  const raw = request.headers['x-dexter-auth']
+  if (typeof raw !== 'string') throw badRequest('missing x-dexter-auth header')
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    throw badRequest('x-dexter-auth must be JSON')
+  }
+  if (!parsed || typeof parsed !== 'object') throw badRequest('invalid auth payload')
+  const value = parsed as Record<string, unknown>
+  if (typeof value.message !== 'string' || typeof value.signature !== 'string' || typeof value.owner !== 'string') {
+    throw badRequest('auth requires message, signature and owner')
+  }
+  return { message: value.message, signature: value.signature as Hex, owner: getAddress(value.owner) }
+}
+
+function nonceFor(owner: Address): NonceRecord {
+  const key = owner.toLowerCase()
+  const existing = nonces.get(key)
+  if (existing && existing.expiresAt > Date.now()) return existing
+  const record = { nonce: `${Date.now()}-${crypto.randomUUID()}`, owner, expiresAt: Date.now() + 5 * 60_000 }
+  nonces.set(key, record)
+  return record
+}
+
+async function verifyAuth(request: IncomingMessage, publicClient: ReturnType<typeof createPublicClient>, bodyOwner?: unknown): Promise<Address> {
+  const auth = parseAuth(request)
+  if (bodyOwner !== undefined && (typeof bodyOwner !== 'string' || getAddress(bodyOwner) !== auth.owner)) {
+    throw badRequest('body owner does not match verified owner')
+  }
+  const record = nonces.get(auth.owner.toLowerCase())
+  if (!record || record.expiresAt <= Date.now()) throw badRequest('nonce is missing or expired')
+  const expiryMatch = auth.message.match(/Expiry:\s*(\d+)/i)
+  if (!auth.message.includes('Dexter') || !auth.message.includes(auth.owner) || !auth.message.includes(record.nonce) || !expiryMatch) {
+    throw badRequest('message must contain Dexter, owner, nonce and expiry')
+  }
+  if (Number(expiryMatch[1]) <= Date.now()) throw badRequest('message is expired')
+  const valid = await publicClient.verifyMessage({ address: auth.owner, message: auth.message, signature: auth.signature })
+  if (!valid) throw badRequest('signature verification failed')
+  nonces.delete(auth.owner.toLowerCase())
+  return auth.owner
+}
+
+function assertRule(value: unknown, markets: string[]): CompiledRule {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw badRequest('compiled rule must be an object')
+  const input = value as Record<string, unknown>
+  const allowed = new Set(['market', 'trigger', 'action', 'cooldownSeconds'])
+  if (Object.keys(input).some((key) => !allowed.has(key))) throw badRequest('compiled rule contains unknown fields')
+  if (typeof input.market !== 'string' || !markets.includes(input.market)) throw badRequest(`market must be one of: ${markets.join(', ')}`)
+  if (!Number.isInteger(input.cooldownSeconds) || (input.cooldownSeconds as number) < 0) throw badRequest('cooldownSeconds must be a non-negative integer')
+  const trigger = input.trigger
+  const action = input.action
+  if (!trigger || typeof trigger !== 'object' || Array.isArray(trigger)) throw badRequest('trigger is required')
+  if (!action || typeof action !== 'object' || Array.isArray(action)) throw badRequest('action is required')
+  const triggerValue = trigger as Record<string, unknown>
+  const actionValue = action as Record<string, unknown>
+  let validTrigger: Trigger
+  if (triggerValue.type === 'liquidation_distance_pct') {
+    if (Object.keys(triggerValue).some((key) => !['type', 'thresholdPct'].includes(key)) || typeof triggerValue.thresholdPct !== 'number' || !Number.isFinite(triggerValue.thresholdPct) || triggerValue.thresholdPct <= 0 || triggerValue.thresholdPct > 100) {
+      throw badRequest('thresholdPct must be a number greater than 0 and at most 100')
+    }
+    validTrigger = { type: 'liquidation_distance_pct', thresholdPct: triggerValue.thresholdPct }
+  } else if (triggerValue.type === 'mark_price') {
+    if (Object.keys(triggerValue).some((key) => !['type', 'direction', 'price'].includes(key)) || !['below', 'above'].includes(triggerValue.direction as string) || typeof triggerValue.price !== 'number' || !Number.isFinite(triggerValue.price) || triggerValue.price <= 0) {
+      throw badRequest('mark_price requires direction below/above and a positive price')
+    }
+    validTrigger = { type: 'mark_price', direction: triggerValue.direction as 'below' | 'above', price: triggerValue.price as number }
+  } else {
+    throw badRequest('unsupported trigger type')
+  }
+  let validAction: Action
+  if (actionValue.type === 'notify_only' && Object.keys(actionValue).length === 1) {
+    validAction = { type: 'notify_only' }
+  } else if (actionValue.type === 'partial_close' && Object.keys(actionValue).every((key) => ['type', 'closePct'].includes(key)) && [25, 50, 75, 100].includes(actionValue.closePct as number)) {
+    validAction = { type: 'partial_close', closePct: actionValue.closePct as 25 | 50 | 75 | 100 }
+  } else {
+    throw badRequest('unsupported action; use notify_only or partial_close with closePct 25, 50, 75 or 100')
+  }
+  return { market: input.market, trigger: validTrigger, action: validAction, cooldownSeconds: input.cooldownSeconds as number }
+}
+
+function restate(rule: CompiledRule): string {
+  const trigger = rule.trigger.type === 'mark_price'
+    ? `when ${rule.market} mark price is ${rule.trigger.direction} ${rule.trigger.price}`
+    : `when liquidation is within ${rule.trigger.thresholdPct}% of the mark price`
+  const action = rule.action.type === 'notify_only' ? 'send a notification' : `close ${rule.action.closePct}% of the position`
+  return `On ${rule.market}, ${action} ${trigger}. Cooldown: ${rule.cooldownSeconds} seconds.`
+}
+
+function allowCompile(owner: Address): void {
+  const now = Date.now()
+  const recent = (compileRate.get(owner.toLowerCase()) ?? []).filter((stamp) => now - stamp < 60_000)
+  if (recent.length >= 5) throw badRequest('compile rate limit exceeded; try again later')
+  recent.push(now)
+  compileRate.set(owner.toLowerCase(), recent)
+}
+
+async function currentPositionExists(client: ProofClient, owner: Address, market: PerpMarket): Promise<boolean> {
+  const positions = await readRetry(`client.listPerpPositions(${owner})`, () => client.listPerpPositions(owner))
+  return positions.some((position) => position.pool.toLowerCase() === market.poolAddress.toLowerCase() && BigInt(position.size) !== 0n)
+}
+
+async function compileRule(textInput: string, owner: Address, markets: PerpMarket[], client: ProofClient): Promise<{ rule: CompiledRule; restatement: string; warning?: string; model: string; docsUrl: string }> {
+  const normalized = textInput.toLowerCase()
+  if (/\bstop[- ]loss\b|\btake[- ]profit\b/.test(normalized)) {
+    throw badRequest('unsupported action: stop-loss and take-profit rules are not supported by the guard schema')
+  }
+  if (/^\s*protect my position\s*[.!?]*\s*$/i.test(textInput)) {
+    throw badRequest('ambiguous request: specify liquidation distance or a mark-price direction and price')
+  }
+  const marketNames = markets.flatMap((market) => [marketName(market), ...(market.baseSymbol ? [market.baseSymbol] : [])])
+  const model = process.env.GEMINI_MODEL ?? DEFAULT_GEMINI_MODEL
+  if (!process.env.GEMINI_MODEL) console.log(`Gemini model selected from official docs: ${model}; URL: ${GEMINI_DOCS_URL}`)
+  const key = process.env.GEMINI_API_KEY
+  if (!key) throw new Error('GEMINI_API_KEY is not configured in server/.env')
+  const schema = {
+    type: 'OBJECT',
+    properties: {
+      market: { type: 'STRING', enum: marketNames },
+      trigger: { type: 'OBJECT', properties: { type: { type: 'STRING', enum: ['liquidation_distance_pct', 'mark_price'] }, thresholdPct: { type: 'NUMBER' }, direction: { type: 'STRING', enum: ['below', 'above'] }, price: { type: 'NUMBER' } }, required: ['type'] },
+      action: { type: 'OBJECT', properties: { type: { type: 'STRING', enum: ['notify_only', 'partial_close'] }, closePct: { type: 'NUMBER', enum: [25, 50, 75, 100] } }, required: ['type'] },
+      cooldownSeconds: { type: 'INTEGER' },
+    },
+    required: ['market', 'trigger', 'action', 'cooldownSeconds'],
+  }
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: `Compile this user request into exactly one supported guard rule: "${textInput}". Owner: ${owner}. Allowed markets only: ${marketNames.join(', ')}. Supported triggers are liquidation_distance_pct with thresholdPct, or mark_price with direction below/above and price. Supported actions are notify_only or partial_close with closePct 25, 50, 75, or 100. Reject ambiguous requests and unsupported stop-loss/take-profit/price-based close semantics. Return JSON only.` }] }],
+      generationConfig: { temperature: 0.1, responseMimeType: 'application/json', responseSchema: schema },
+    }),
+  })
+  if (!response.ok) throw new Error(`Gemini request failed with HTTP ${response.status}`)
+  const payload = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }
+  const output = payload.candidates?.[0]?.content?.parts?.[0]?.text
+  if (!output) throw new Error('Gemini returned no rule')
+  let parsed: unknown
+  try { parsed = JSON.parse(output) } catch { throw badRequest('Gemini returned invalid structured JSON') }
+  const rule = assertRule(parsed, marketNames)
+  const selectedMarket = markets.find((market) => marketName(market) === rule.market || market.baseSymbol === rule.market)
+  if (!selectedMarket) throw badRequest('compiled market is not available')
+  const canonicalRule = { ...rule, market: marketName(selectedMarket) }
+  const warning = !(await currentPositionExists(client, owner, selectedMarket)) ? 'No open position in this market right now. The guard will wait.' : undefined
+  return { rule: canonicalRule, restatement: restate(canonicalRule), ...(warning ? { warning } : {}), model, docsUrl: GEMINI_DOCS_URL }
 }
 
 async function ensureData(): Promise<void> {
@@ -359,7 +541,7 @@ async function main(): Promise<void> {
   }, POLL_MS)
 
   const server = createServer(async (request, response) => {
-    await handleHttp(request, response, active, saveGuards, () => ({ connected, lastEventTime, dryRun: DRY_RUN }))
+    await handleHttp(request, response, active, saveGuards, client, publicClient, perpMarkets, () => ({ connected, lastEventTime, dryRun: DRY_RUN }))
   })
   const port = Number(process.env.GUARDIAN_PORT ?? 8787)
   server.listen(port, () => console.log(`Guardian HTTP server listening on ${port}`))
@@ -461,6 +643,9 @@ async function handleHttp(
   response: ServerResponse,
   active: () => Promise<Guard[]>,
   saveGuards: (guards: Guard[]) => Promise<void>,
+  client: ProofClient,
+  publicClient: ReturnType<typeof createPublicClient>,
+  markets: PerpMarket[],
   health: () => { connected: boolean; lastEventTime: string | null; dryRun: boolean },
 ): Promise<void> {
   response.setHeader('content-type', 'application/json')
@@ -476,6 +661,38 @@ async function handleHttp(
       response.end(JSON.stringify(result))
       return
     }
+    if (request.method === 'GET' && url.pathname === '/api/auth/nonce') {
+      const ownerValue = url.searchParams.get('owner')
+      if (!ownerValue) throw badRequest('owner is required')
+      const owner = getAddress(ownerValue)
+      const record = nonceFor(owner)
+      response.end(JSON.stringify({ owner, nonce: record.nonce, expiresAt: new Date(record.expiresAt).toISOString(), message: `Dexter authorization\nOwner: ${owner}\nNonce: ${record.nonce}\nExpiry: ${record.expiresAt}` }))
+      return
+    }
+    if (request.method === 'POST' && url.pathname === '/api/guards/compile') {
+      const body = await parseJsonBody(request) as Record<string, unknown>
+      if (typeof body.text !== 'string' || typeof body.owner !== 'string') throw badRequest('compile requires text and owner')
+      const owner = getAddress(body.owner)
+      allowCompile(owner)
+      const result = await compileRule(body.text, owner, markets, client)
+      response.end(JSON.stringify(result))
+      return
+    }
+    if (request.method === 'POST' && url.pathname === '/api/guards') {
+      const body = await parseJsonBody(request) as Record<string, unknown>
+      const owner = await verifyAuth(request, publicClient, body.owner)
+      if (typeof body.market !== 'string') throw badRequest('market is required')
+      const rule = assertRule({ market: body.market, trigger: body.trigger, action: body.action, cooldownSeconds: body.cooldownSeconds ?? 300 }, markets.flatMap((market) => [marketName(market), ...(market.baseSymbol ? [market.baseSymbol] : [])]))
+      const current = await guards()
+      const duplicate = current.some((guard) => guard.status === 'active' && guard.owner.toLowerCase() === owner.toLowerCase() && guard.market === rule.market && JSON.stringify({ trigger: guard.trigger, action: guard.action, cooldownSeconds: guard.cooldownSeconds }) === JSON.stringify({ trigger: rule.trigger, action: rule.action, cooldownSeconds: rule.cooldownSeconds }))
+      if (duplicate) throw badRequest('an identical active guard already exists for this owner and market')
+      const guard: Guard = { id: crypto.randomUUID(), owner, market: rule.market, trigger: rule.trigger, action: rule.action, cooldownSeconds: rule.cooldownSeconds, status: 'active', createdAt: new Date().toISOString(), lastTriggeredAt: null, source: typeof body.source === 'string' ? body.source : 'Created from a validated rule.' }
+      current.push(guard)
+      await saveGuards(current)
+      response.statusCode = 201
+      response.end(JSON.stringify(guard))
+      return
+    }
     if (request.method === 'GET' && url.pathname === '/api/events') {
       const owner = url.searchParams.get('owner')
       const records: EventRecord[] = JSON.parse(await readFile(EVENTS_FILE, 'utf8'))
@@ -483,15 +700,27 @@ async function handleHttp(
       return
     }
     if (request.method === 'PATCH' && url.pathname.startsWith('/api/guards/')) {
-      response.statusCode = 501
-      response.end(JSON.stringify({ error: 'Wallet ownership verification is unavailable server-side; AuthShield only proves browser connection.' }))
+      const id = url.pathname.slice('/api/guards/'.length)
+      const body = await parseJsonBody(request) as Record<string, unknown>
+      const current = await guards()
+      const guard = current.find((item) => item.id === id)
+      if (!guard) throw badRequest('guard not found')
+      const owner = await verifyAuth(request, publicClient, body.owner ?? guard.owner)
+      if (owner.toLowerCase() !== guard.owner.toLowerCase()) throw badRequest('verified owner does not own this guard')
+      if (body.status !== 'active' && body.status !== 'paused') throw badRequest('status must be active or paused')
+      guard.status = body.status
+      await saveGuards(current)
+      response.end(JSON.stringify(guard))
       return
     }
     response.statusCode = 404
     response.end(JSON.stringify({ error: 'Not found' }))
   } catch (error) {
-    response.statusCode = 500
-    response.end(JSON.stringify({ error: text(error) }))
+    const message = text(error)
+    response.statusCode = /missing x-dexter-auth|auth requires|nonce is missing|signature verification failed|message must contain/i.test(message)
+      ? 401
+      : message.includes('BAD_REQUEST:') ? 400 : 500
+    response.end(JSON.stringify({ error: message }))
   }
 }
 
