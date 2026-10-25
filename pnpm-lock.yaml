@@ -13,7 +13,10 @@ importers:
         version: 2.1.2(gsap@3.15.0)(react@19.3.1)
       '@somnia-chain/markets-sdk':
         specifier: 0.32.1
-        version: 0.32.1(bufferutil@4.1.0)(graphql@17.0.2)(react@19.3.1)(utf-8-validate@5.0.10)(viem@2.57.11(bufferutil@4.1.0)(typescript@6.0.3)(utf-8-validate@5.0.10)(zod@4.6.7))
+        version: 0.32.1(@somnia-chain/reactivity@0.2.1(viem@2.57.11(bufferutil@4.1.0)(typescript@6.0.3)(utf-8-validate@5.0.10)(zod@4.6.7)))(bufferutil@4.1.0)(graphql@17.0.2)(react@19.3.1)(utf-8-validate@5.0.10)(viem@2.57.11(bufferutil@4.1.0)(typescript@6.0.3)(utf-8-validate@5.0.10)(zod@4.6.7))
+      '@somnia-chain/reactivity':
+        specifier: ^0.2.1
+        version: 0.2.1(viem@2.57.11(bufferutil@4.1.0)(typescript@6.0.3)(utf-8-validate@5.0.10)(zod@4.6.7))
       '@tailwindcss/vite':
         specifier: ^4.3.3
         version: 4.3.3(vite@8.3.5(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15))
@@ -883,6 +886,11 @@ packages:
         optional: true
       react:
         optional: true
+
+  '@somnia-chain/reactivity@0.2.1':
+    resolution: {integrity: sha512-sLv+vN6JGbJ0O3LmsU7R+nGAMNpUJerJQ1v/xfC9nj2OjP3ze5nrmABhdp4TTknTdOAEU0oED0a4Z0Q8cAXP/g==}
+    peerDependencies:
+      viem: ^2.48.2
 
   '@tailwindcss/node@4.3.3':
     resolution: {integrity: sha512-/T8IKEsf9VTU6tLjgC7+sv2mOPtQxzE2jMw7u4Tt40Tx+QSZxpzh95/H6cMKoja9XuW7iMdLJYBB0o9G1CaAgg==}
@@ -4024,7 +4032,7 @@ snapshots:
     dependencies:
       viem: 2.57.11(bufferutil@4.1.0)(typescript@6.0.3)(utf-8-validate@5.0.10)(zod@4.6.7)
 
-  '@somnia-chain/markets-sdk@0.32.1(bufferutil@4.1.0)(graphql@17.0.2)(react@19.3.1)(utf-8-validate@5.0.10)(viem@2.57.11(bufferutil@4.1.0)(typescript@6.0.3)(utf-8-validate@5.0.10)(zod@4.6.7))':
+  '@somnia-chain/markets-sdk@0.32.1(@somnia-chain/reactivity@0.2.1(viem@2.57.11(bufferutil@4.1.0)(typescript@6.0.3)(utf-8-validate@5.0.10)(zod@4.6.7)))(bufferutil@4.1.0)(graphql@17.0.2)(react@19.3.1)(utf-8-validate@5.0.10)(viem@2.57.11(bufferutil@4.1.0)(typescript@6.0.3)(utf-8-validate@5.0.10)(zod@4.6.7))':
     dependencies:
       '@graphql-typed-document-node/core': 3.2.0(graphql@17.0.2)
       '@somnia-chain/accounts-sdk': 0.4.0(viem@2.57.11(bufferutil@4.1.0)(typescript@6.0.3)(utf-8-validate@5.0.10)(zod@4.6.7))
@@ -4033,11 +4041,16 @@ snapshots:
       ws: 8.21.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
       zod: 4.6.7
     optionalDependencies:
+      '@somnia-chain/reactivity': 0.2.1(viem@2.57.11(bufferutil@4.1.0)(typescript@6.0.3)(utf-8-validate@5.0.10)(zod@4.6.7))
       react: 19.3.1
     transitivePeerDependencies:
       - bufferutil
       - graphql
       - utf-8-validate
+
+  '@somnia-chain/reactivity@0.2.1(viem@2.57.11(bufferutil@4.1.0)(typescript@6.0.3)(utf-8-validate@5.0.10)(zod@4.6.7))':
+    dependencies:
+      viem: 2.57.11(bufferutil@4.1.0)(typescript@6.0.3)(utf-8-validate@5.0.10)(zod@4.6.7)
 
   '@tailwindcss/node@4.3.3':
     dependencies:

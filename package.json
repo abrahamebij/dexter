@@ -7,11 +7,13 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "guardian": "tsx server/guardian.ts"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
     "@somnia-chain/markets-sdk": "0.32.1",
+    "@somnia-chain/reactivity": "^0.2.1",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-query": "^5.104.5",
     "connectkit": "^1.9.2",
