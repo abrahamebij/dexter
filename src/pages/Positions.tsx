@@ -1,21 +1,21 @@
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { FiArrowUpRight } from 'react-icons/fi'
+import { useAccount } from 'wagmi'
+import { api, resolveOwner } from '../lib/api'
 
+type Position = { market: string; side: string; size: string; entryPrice: string; markPrice: string | null; margin: string; liquidationPrice: string | null; liquidationDistancePct: number | null; unrealizedPnl: string | null }
 export default function Positions() {
-  return (
-    <div className="space-y-10">
-      <header><p className="text-sm text-subtle">Positions</p><h1 className="mt-3 text-4xl font-medium tracking-[-0.06em]">Your open positions.</h1></header>
-      <div className="overflow-hidden rounded-2xl border border-line">
-        <div className="hidden grid-cols-[1.3fr_1fr_1fr_1fr_auto] gap-4 border-b border-line bg-panel px-6 py-4 text-xs uppercase tracking-[0.15em] text-subtle md:grid">
-          <span>Market</span><span>Size</span><span>Entry</span><span>PnL</span><span />
-        </div>
-        <div className="grid gap-5 px-6 py-6 md:grid-cols-[1.3fr_1fr_1fr_1fr_auto] md:items-center md:gap-4">
-          <div><p className="font-medium">ETH / USDC</p><p className="mt-1 text-sm text-muted">Long · 5x</p></div>
-          <div><p className="text-sm">$4,200</p><p className="mt-1 text-xs text-muted">0.84 ETH</p></div>
-          <p className="text-sm">$2,846.12</p><p className="text-sm text-accent">+$183.40</p>
-          <Link to="/app/guards/new" className="flex items-center gap-2 text-sm font-medium">Guard this <FiArrowUpRight /></Link>
-        </div>
-      </div>
-    </div>
-  )
+  const { address } = useAccount()
+  const [positions, setPositions] = useState<Position[]>([])
+  const [error, setError] = useState('')
+  useEffect(() => {
+    if (!address) return
+    const load = () => api<{ positions: Position[] }>(`/api/positions?owner=${resolveOwner(address)}`).then((value) => { setPositions(value.positions); setError('') }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
+    load(); const timer = window.setInterval(load, 5_000); return () => window.clearInterval(timer)
+  }, [address])
+  return <div className="space-y-10"><header><p className="text-sm text-subtle">Positions</p><h1 className="mt-3 text-4xl font-medium tracking-[-0.06em]">Your open positions.</h1></header>
+    {error && <p className="text-sm text-muted">{error}</p>}
+    {positions.length === 0 ? <div className="rounded-2xl border border-line p-8 text-sm text-muted">No open positions for this connected address.</div> : <div className="grid gap-4">{positions.map((position) => <div key={position.market} className="rounded-2xl border border-line p-6"><div className="flex items-start justify-between"><div><p className="font-medium">{position.market}</p><p className="mt-1 text-sm text-muted">{position.side} · {position.size}</p></div><Link to="/app/guards/new" className="flex items-center gap-2 text-sm font-medium">Guard this <FiArrowUpRight /></Link></div><div className="mt-6 grid gap-4 text-sm sm:grid-cols-3"><span><small className="block text-muted">Entry / mark</small>{position.entryPrice} / {position.markPrice ?? '—'}</span><span><small className="block text-muted">Liquidation</small>{position.liquidationPrice ?? '—'} ({position.liquidationDistancePct ?? '—'}%)</span><span><small className="block text-muted">Unrealized PnL</small>{position.unrealizedPnl ?? '—'}</span></div></div>)}</div>}
+  </div>
 }

@@ -85,7 +85,7 @@ export default function Home() {
     <main ref={page} className="min-h-screen overflow-hidden bg-canvas text-ink">
       <nav className="mx-auto flex w-full max-w-7xl items-center justify-between px-6 py-7 lg:px-10">
         <Link to="/" className="nav-item flex items-center gap-2 text-lg font-semibold tracking-[-0.04em]">
-          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-ink text-xs text-canvas">d</span>
+          <img src="/favicon.svg" alt="" className="h-7 w-7" />
           dexter
         </Link>
         <div className="hidden items-center gap-9 text-sm text-muted md:flex">

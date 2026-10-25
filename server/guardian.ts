@@ -37,6 +37,7 @@ const WS_RPC_URL = 'wss://api.hideki2.infra.testnet.somnia.network/ws'
 const INDEXER_URL = 'https://hideki-dev.smk.somnia.host/v1/graphql'
 const MARGIN_BANK = '0x478769E1177C0773c43A593DCCc4Ad15F15F1394' as Address
 const LIQUIDATION_ENGINE = '0xA66d3C24Ad4a389d863846905D8173e1017e9F4D' as Address
+const OPERATOR_PERMISSIONS_REGISTRY = '0x6B2FbfeD328FF5F20C0BE7D3C3437613aFFE8D3a' as Address
 const GAS_LIMIT = 10_000_000n
 const DATA_DIR = fileURLToPath(new URL('./data/', import.meta.url))
 const GUARDS_FILE = `${DATA_DIR}guards.json`
@@ -276,7 +277,7 @@ async function compileRule(textInput: string, owner: Address, markets: PerpMarke
     properties: {
       market: { type: 'STRING', enum: marketNames },
       trigger: { type: 'OBJECT', properties: { type: { type: 'STRING', enum: ['liquidation_distance_pct', 'mark_price'] }, thresholdPct: { type: 'NUMBER' }, direction: { type: 'STRING', enum: ['below', 'above'] }, price: { type: 'NUMBER' } }, required: ['type'] },
-      action: { type: 'OBJECT', properties: { type: { type: 'STRING', enum: ['notify_only', 'partial_close'] }, closePct: { type: 'NUMBER', enum: [25, 50, 75, 100] } }, required: ['type'] },
+      action: { type: 'OBJECT', properties: { type: { type: 'STRING', enum: ['notify_only', 'partial_close'] }, closePct: { type: 'INTEGER' } }, required: ['type'] },
       cooldownSeconds: { type: 'INTEGER' },
     },
     required: ['market', 'trigger', 'action', 'cooldownSeconds'],
@@ -289,7 +290,10 @@ async function compileRule(textInput: string, owner: Address, markets: PerpMarke
       generationConfig: { temperature: 0.1, responseMimeType: 'application/json', responseSchema: schema },
     }),
   })
-  if (!response.ok) throw new Error(`Gemini request failed with HTTP ${response.status}`)
+  if (!response.ok) {
+    const details = await response.text()
+    throw new Error(`Gemini request failed with HTTP ${response.status}: ${details}`)
+  }
   const payload = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }
   const output = payload.candidates?.[0]?.content?.parts?.[0]?.text
   if (!output) throw new Error('Gemini returned no rule')
@@ -309,26 +313,7 @@ async function ensureData(): Promise<void> {
     await readFile(GUARDS_FILE, 'utf8')
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    const owner = process.env.OWNER_ADDRESS
-    const market = process.env.PROOF_MARKET
-    if (!owner || !market) {
-      await writeFile(GUARDS_FILE, '[]\n', 'utf8')
-      return
-    }
-    const seed: Guard = {
-      id: 'default-test-position',
-      owner: getAddress(owner),
-      market,
-      trigger: { type: 'liquidation_distance_pct', thresholdPct: 10 },
-      action: { type: 'notify_only' },
-      cooldownSeconds: 300,
-      status: 'active',
-      createdAt: new Date().toISOString(),
-      lastTriggeredAt: null,
-      source: 'Seeded from OWNER_ADDRESS and PROOF_MARKET in server/.env for the dry-run worker.',
-    }
-    await writeFile(GUARDS_FILE, `${JSON.stringify([seed], null, 2)}\n`, 'utf8')
-    console.log(`Seeded one dry-run guard for ${seed.owner} on ${seed.market}`)
+    await writeFile(GUARDS_FILE, '[]\n', 'utf8')
   }
   try {
     await readFile(EVENTS_FILE, 'utf8')
@@ -368,6 +353,12 @@ function marketName(market: PerpMarket): string {
   return `${market.baseSymbol ?? market.baseToken}/${market.quoteSymbol ?? market.quoteToken}`
 }
 
+function botAccountFromEnv(): Address {
+  const configuredKey = process.env.BOT_PRIVATE_KEY
+  if (!configuredKey) throw new Error('BOT_PRIVATE_KEY is not configured in server/.env')
+  return privateKeyToAccount((configuredKey.startsWith('0x') ? configuredKey : `0x${configuredKey}`) as Hex).address
+}
+
 function positionSnapshot(position: { size: bigint; avgEntryPrice: bigint }, liquidationPrice: bigint | null, market: PerpMarket): PositionSnapshot {
   return {
     size: position.size.toString(),
@@ -405,7 +396,7 @@ async function main(): Promise<void> {
     chain: hidekiTestnet,
     indexerUrl: INDEXER_URL,
     wsRpcUrl: WS_RPC_URL,
-    addresses: { ...SOMNIA_HIDEKI_TESTNET_ADDRESSES },
+    addresses: { ...SOMNIA_HIDEKI_TESTNET_ADDRESSES, operatorPermissionsRegistry: OPERATOR_PERMISSIONS_REGISTRY },
   })
   const publicClient = createPublicClient({ chain: hidekiTestnet, transport: webSocket(WS_RPC_URL) })
   const reactivity = new ReactivitySDK({ public: publicClient })
@@ -659,6 +650,58 @@ async function handleHttp(
       const owner = url.searchParams.get('owner')
       const result = (await active()).filter((guard) => !owner || guard.owner.toLowerCase() === owner.toLowerCase())
       response.end(JSON.stringify(result))
+      return
+    }
+    if (request.method === 'GET' && url.pathname === '/api/positions') {
+      const ownerValue = url.searchParams.get('owner')
+      if (!ownerValue) throw badRequest('owner is required')
+      const owner = getAddress(ownerValue)
+      const indexed = await readRetry(`client.listPerpPositions(${owner})`, () => client.listPerpPositions(owner))
+      const positions = []
+      for (const market of markets) {
+        const position = await readRetry(`client.getPerpPosition(${market.poolAddress}, ${owner})`, () => client.getPerpPosition({ marginBank: market.marginBank, account: owner, pool: market.poolAddress }))
+        if (position.size === 0n) continue
+        const analytics = await readRetry(`client.getPerpPositionAnalytics(${market.poolAddress}, ${owner})`, () => client.getPerpPositionAnalytics({ marginBank: market.marginBank, account: owner, pool: market.poolAddress }))
+        const liquidationPrice = await readRetry(`client.getLiquidationPrice(${market.poolAddress}, ${owner})`, () => client.getLiquidationPrice({ marginBank: market.marginBank, account: owner, pool: market.poolAddress }))
+        const margin = await readRetry(`client.getMarginAccount(${market.marginBank}, ${owner})`, () => client.getMarginAccount(market.marginBank, owner))
+        const markPrice = analytics.priceable ? analytics.markPrice : 0n
+        const distance = liquidationPrice !== null && markPrice > 0n ? Number(((liquidationPrice > markPrice ? liquidationPrice - markPrice : markPrice - liquidationPrice) * 10_000n) / markPrice) / 100 : null
+        positions.push({
+          market: marketName(market),
+          pool: market.poolAddress,
+          side: position.size > 0n ? 'long' : 'short',
+          size: formatUnits(position.size < 0n ? -position.size : position.size, market.baseDecimals),
+          sizeRaw: position.size.toString(),
+          entryPrice: formatUnits(position.avgEntryPrice, 18),
+          markPrice: analytics.priceable ? formatUnits(analytics.markPrice, 18) : null,
+          margin: formatUnits(margin.equity, market.quoteDecimals),
+          liquidationPrice: liquidationPrice === null ? null : formatUnits(liquidationPrice, 18),
+          liquidationDistancePct: distance,
+          unrealizedPnl: analytics.priceable ? formatUnits(analytics.unrealizedPnl, market.quoteDecimals) : null,
+          asOfBlock: analytics.asOfBlock.toString(),
+          indexed: indexed.some((item) => item.pool.toLowerCase() === market.poolAddress.toLowerCase()),
+        })
+      }
+      response.end(JSON.stringify({ owner, positions }))
+      return
+    }
+    if (request.method === 'GET' && url.pathname === '/api/permissions') {
+      const ownerValue = url.searchParams.get('owner')
+      if (!ownerValue) throw badRequest('owner is required')
+      const owner = getAddress(ownerValue)
+      const bot = botAccountFromEnv()
+      const balance = await readRetry(`publicClient.getBalance(${bot})`, () => publicClient.getBalance({ address: bot }))
+      const permissions = []
+      for (const market of markets) {
+        const approved = await readRetry(`client.isApprovedForPool(${market.poolAddress}, ${owner})`, () => client.isApprovedForPool({
+          pool: market.poolAddress,
+          owner,
+          operator: bot,
+          selector: '0x80054449',
+        }))
+        permissions.push({ market: marketName(market), pool: market.poolAddress, approved })
+      }
+      response.end(JSON.stringify({ owner, bot, selector: '0x80054449', botBalance: formatUnits(balance, 18), botBalanceRaw: balance.toString(), permissions }))
       return
     }
     if (request.method === 'GET' && url.pathname === '/api/auth/nonce') {

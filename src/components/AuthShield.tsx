@@ -11,7 +11,7 @@ export default function AuthShield() {
       <main className="flex min-h-screen items-center justify-center bg-canvas px-6 text-ink">
         <div className="w-full max-w-md text-center">
           <Link to="/" className="mx-auto flex w-fit items-center gap-2 text-lg font-semibold tracking-[-0.04em]">
-            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-ink text-xs text-canvas">d</span>
+            <img src="/favicon.svg" alt="" className="h-7 w-7" />
             dexter
           </Link>
           <div className="mt-16 rounded-2xl border border-line bg-panel p-8 sm:p-10">
