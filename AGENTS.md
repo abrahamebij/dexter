@@ -1,5 +1,3 @@
-Create or replace AGENTS.md in the repo root with exactly the content below, then stop and confirm. Do not touch any other file.
-
 # Dexter: agent rules
 
 ## Product
@@ -13,8 +11,9 @@ Dexter is a position guardian for dreamDEX perps on Somnia Tokyo testnet. A guar
 - Secrets (bot private key, Gemini API key) live only in server/.env. Never use a VITE_ prefix for a secret. Never log secrets.
 - Never use mock or hardcoded data in the final app. Empty states are fine, fake data is not.
 - Whenever the API, SDK or docs behave differently from what is documented, stop and write a file in feedback/ using the template in feedback/TEMPLATE.md (real evidence only: tx hash, request/response, wallet address, SDK version 0.32.1, network Somnia Tokyo testnet). Never put a security vulnerability in the repo.
+- UI rule: one primary color only (the one already defined in src/index.css). No secondary or tertiary accent colors. Danger, warning and success colors appear only when a state truly needs them. No purple gradients, no generic 3D blobs, no excessive rounded cards, no glassmorphism unless already in the existing design.
 
-## Verified constants (Somnia Tokyo testnet, Hideki chain) read more in docs/ folder
+## Verified constants (Somnia Tokyo testnet, Hideki chain)
 - Chain ID: 50383
 - RPC: https://api.hideki2.infra.testnet.somnia.network
 - WebSocket: wss://api.hideki2.infra.testnet.somnia.network/ws
@@ -33,4 +32,11 @@ Dexter is a position guardian for dreamDEX perps on Somnia Tokyo testnet. A guar
 - Known traps from the docs: prices have 18 decimals; quantity uses the market's own baseDecimals (read it, never assume 18); the perps collateral is NOT SOMNIA_HIDEKI_TESTNET_ADDRESSES.collateral (read quoteToken from the market row); the SDK reads the chain over WebSocket (an HTTP-only proxy fails with "genesis check failed"); send perp orders with a gas limit of 10,000,000; an IOC that fills nothing reverts with ImmediateOrCancelNoFill, so price IOCs through the book with slippage room; call getMaxPerpOrderSize before every order and respect priceable, placeable, maxQuantity and limitedBy.
 - Delegated order call (raw): placeOrderFor(address owner, bool isBid, uint64 userData, uint256 price, uint256 quantity, uint64 expireTimestampNs, uint8 orderType, uint8 selfMatchingOption, address builder, uint96 builderFeeBpsTimes1k). Take orderType and selfMatchingOption values from the SDK ABIs or docs/PERPS.md, never guess them.
 - Session-key limits (confirmed by dreamDEX admins): the bot can place orders and partially close for the owner after the owner has deposited margin. Reduce-only TP/SL does NOT work with a session key.
+- Verified by running the proof script: OWNER_ADDRESS must be the DreamDEX smart wallet address (the one that holds the Perps account), not the MetaMask signer address. Margin must be in the Perps account.
+- Verified operator check: client.isApprovedForPool({ pool, owner, operator, selector }) with selector 0x80054449 (the verified selector of placeOrderFor). Check it before every send. If it is false, placeOrderFor reverts with OnlyApprovedContracts() (0x3fb0ba2e).
+- Verified order params: ORDER_TYPE is LIMIT 0, FILL_OR_KILL 1, MARKET 2 (IOC, the price you pass bounds the escrow, so pass the best opposite level plus or minus slippage), POST_ONLY 3. SELF_MATCHING_OPTION is CANCEL_TAKER 0, CANCEL_MAKER 1.
+- Verified expiry rule: expireTimestampNs must be in the future. 0 or a past value reverts with OrderAlreadyExpired() (0x3154078e). Derive it from the latest RPC block timestamp using the same default the SDK uses for non-binary pools (about 50 years, see trade.ts). Never use local machine time.
+- SDK methods confirmed to exist: listPerpMarkets, getPerpSystemConfig, listPerpPositions, getPerpPosition, getMarginAccount, getLiquidationPrice, getMaxPerpOrderSize, getPerpVoucherEligibility, isApprovedForPool, stopLive (shutdown). The SDK exposes no delegated perp placeOrderFor wrapper, so use the raw ABI.
+- The testnet RPC sometimes times out on reads ("The request took too long to respond"). Retry reads with backoff. Never retry a send.
+- Never run git commit or git push unless I explicitly ask. Never auto-write feedback/ files.
 - Reactivity is available on this chain. Somnia Agents are NOT live here, do not use them.
