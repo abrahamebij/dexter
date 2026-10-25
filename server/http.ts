@@ -112,7 +112,7 @@ export async function handleHttp(
     }
     if (request.method === 'POST' && url.pathname === '/api/guards') {
       const body = await parseJsonBody(request) as Record<string, unknown>
-      const owner = await verifyAuth(request, publicClient, body.owner)
+      const owner = await verifyAuth(request, publicClient, client, body.owner)
       if (typeof body.market !== 'string') throw badRequest('market is required')
       const rule = assertRule({ market: body.market, trigger: body.trigger, action: body.action, cooldownSeconds: body.cooldownSeconds ?? 300 }, markets.flatMap((market) => [marketName(market), ...(market.baseSymbol ? [market.baseSymbol] : [])]))
       const guard: Guard = { id: crypto.randomUUID(), owner, market: rule.market, trigger: rule.trigger, action: rule.action, cooldownSeconds: rule.cooldownSeconds, status: 'active', createdAt: new Date().toISOString(), lastTriggeredAt: null, source: body.source === 'manual' ? 'manual' : 'ai' }
@@ -138,7 +138,7 @@ export async function handleHttp(
       const body = await parseJsonBody(request) as Record<string, unknown>
       const guard = (await guards()).find((item) => item.id === id)
       if (!guard) throw badRequest('guard not found')
-      const owner = await verifyAuth(request, publicClient, body.owner ?? guard.owner)
+      const owner = await verifyAuth(request, publicClient, client, body.owner ?? guard.owner)
       if (owner.toLowerCase() !== guard.owner.toLowerCase()) throw badRequest('verified owner does not own this guard')
       if (body.status !== 'active' && body.status !== 'paused') throw badRequest('status must be active or paused')
       let blocked = false
