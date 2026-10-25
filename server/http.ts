@@ -1,16 +1,14 @@
-import { readFile } from 'node:fs/promises'
 import { createPublicClient, getAddress, formatUnits } from 'viem'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { badRequest, readRetry, EVENTS_FILE, parseJsonBody, text, type Guard, type EventRecord, type PerpMarket, type ProofClient } from './shared.js'
+import { badRequest, readRetry, parseJsonBody, text, type Guard, type PerpMarket, type ProofClient } from './shared.js'
 import { verifyAuth, nonceFor } from './auth.js'
 import { allowCompile, assertRule } from './rules.js'
 import { compileRule, validateManualRule } from './compiler.js'
-import { botAccountFromEnv, guards, saveGuards, marketName } from './storage.js'
+import { botAccountFromEnv, guards, mutateGuards, readEvents, updateGuard, marketName } from './storage.js'
 export async function handleHttp(
   request: IncomingMessage,
   response: ServerResponse,
   active: () => Promise<Guard[]>,
-  saveGuards: (guards: Guard[]) => Promise<void>,
   client: ProofClient,
   publicClient: ReturnType<typeof createPublicClient>,
   markets: PerpMarket[],
@@ -25,7 +23,8 @@ export async function handleHttp(
     }
     if (request.method === 'GET' && url.pathname === '/api/guards') {
       const owner = url.searchParams.get('owner')
-      const result = (await active()).filter((guard) => !owner || guard.owner.toLowerCase() === owner.toLowerCase())
+      // All statuses, so paused and fired guards stay visible in the UI.
+      const result = (await guards()).filter((guard) => !owner || guard.owner.toLowerCase() === owner.toLowerCase())
       response.end(JSON.stringify(result))
       return
     }
@@ -116,34 +115,39 @@ export async function handleHttp(
       const owner = await verifyAuth(request, publicClient, body.owner)
       if (typeof body.market !== 'string') throw badRequest('market is required')
       const rule = assertRule({ market: body.market, trigger: body.trigger, action: body.action, cooldownSeconds: body.cooldownSeconds ?? 300 }, markets.flatMap((market) => [marketName(market), ...(market.baseSymbol ? [market.baseSymbol] : [])]))
-      const current = await guards()
-      const duplicate = current.some((guard) => guard.status === 'active' && guard.owner.toLowerCase() === owner.toLowerCase() && guard.market === rule.market && JSON.stringify({ trigger: guard.trigger, action: guard.action, cooldownSeconds: guard.cooldownSeconds }) === JSON.stringify({ trigger: rule.trigger, action: rule.action, cooldownSeconds: rule.cooldownSeconds }))
-      if (duplicate) throw badRequest('an identical active guard already exists for this owner and market')
       const guard: Guard = { id: crypto.randomUUID(), owner, market: rule.market, trigger: rule.trigger, action: rule.action, cooldownSeconds: rule.cooldownSeconds, status: 'active', createdAt: new Date().toISOString(), lastTriggeredAt: null, source: body.source === 'manual' ? 'manual' : 'ai' }
-      current.push(guard)
-      await saveGuards(current)
+      const signature = JSON.stringify({ trigger: rule.trigger, action: rule.action, cooldownSeconds: rule.cooldownSeconds })
+      const created = await mutateGuards((current) => {
+        const duplicate = current.some((item) => item.status === 'active' && item.owner.toLowerCase() === owner.toLowerCase() && item.market === rule.market && JSON.stringify({ trigger: item.trigger, action: item.action, cooldownSeconds: item.cooldownSeconds }) === signature)
+        if (duplicate) return false
+        current.push(guard)
+        return true
+      })
+      if (!created) throw badRequest('an identical active guard already exists for this owner and market')
       response.statusCode = 201
       response.end(JSON.stringify(guard))
       return
     }
     if (request.method === 'GET' && url.pathname === '/api/events') {
       const owner = url.searchParams.get('owner')
-      const records: EventRecord[] = JSON.parse(await readFile(EVENTS_FILE, 'utf8'))
-      response.end(JSON.stringify(owner ? records.filter((record) => record.owner?.toLowerCase() === owner.toLowerCase()) : records))
+      response.end(JSON.stringify(await readEvents(owner)))
       return
     }
     if (request.method === 'PATCH' && url.pathname.startsWith('/api/guards/')) {
       const id = url.pathname.slice('/api/guards/'.length)
       const body = await parseJsonBody(request) as Record<string, unknown>
-      const current = await guards()
-      const guard = current.find((item) => item.id === id)
+      const guard = (await guards()).find((item) => item.id === id)
       if (!guard) throw badRequest('guard not found')
       const owner = await verifyAuth(request, publicClient, body.owner ?? guard.owner)
       if (owner.toLowerCase() !== guard.owner.toLowerCase()) throw badRequest('verified owner does not own this guard')
       if (body.status !== 'active' && body.status !== 'paused') throw badRequest('status must be active or paused')
-      guard.status = body.status
-      await saveGuards(current)
-      response.end(JSON.stringify(guard))
+      let blocked = false
+      const updated = await updateGuard(id, (item) => {
+        if (item.status === 'executing') { blocked = true; return }
+        item.status = body.status as 'active' | 'paused'
+      })
+      if (blocked) throw badRequest('guard is executing; wait for it to finish')
+      response.end(JSON.stringify(updated))
       return
     }
     response.statusCode = 404

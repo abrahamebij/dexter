@@ -4,9 +4,9 @@ import { SDK as ReactivitySDK } from '@somnia-chain/reactivity'
 import { hidekiTestnet } from '@somnia-chain/markets-sdk/chains'
 import { SOMNIA_HIDEKI_TESTNET_ADDRESSES } from '@somnia-chain/markets-sdk'
 import { DRY_RUN, INDEXER_URL, WS_RPC_URL, MARGIN_BANK, LIQUIDATION_ENGINE, OPERATOR_PERMISSIONS_REGISTRY, POLL_MS, marginAbi, liquidationAbi, readRetry, topic0, json, text, type Guard, type PerpMarket, type ProofClient } from './shared.js'
-import { ensureData, loadClientFactory, marketName, guards, saveGuards, eventLog } from './storage.js'
+import { ensureData, loadClientFactory, marketName, guards, updateGuard, eventLog } from './storage.js'
 import { ownerInDecoded, positionSnapshot, triggered, inCooldown } from './helpers.js'
-import { executePartialClose } from './executor.js'
+import { executePartialClose, closeBot } from './executor.js'
 import { handleHttp } from './http.js'
 export async function main(): Promise<void> {
   await ensureData()
@@ -20,6 +20,11 @@ export async function main(): Promise<void> {
   const publicClient = createPublicClient({ chain: hidekiTestnet, transport: webSocket(WS_RPC_URL) })
   const reactivity = new ReactivitySDK({ public: publicClient })
   const active = () => guards().then((items) => items.filter((guard) => guard.status === 'active'))
+  for (const stuck of (await guards()).filter((guard) => guard.status === 'executing')) {
+    // The worker stopped mid-execution. Never resend automatically; the owner decides.
+    await updateGuard(stuck.id, (item) => { item.status = 'paused' })
+    await eventLog({ timestamp: new Date().toISOString(), kind: 'execution_interrupted', guardId: stuck.id, owner: stuck.owner, market: stuck.market, reason: 'Worker restarted while this guard was executing; paused for manual review. Check the position before resuming.' })
+  }
   const markets = await readRetry('client.listPerpMarkets()', () => client.listPerpMarkets())
   const perpMarkets = markets.filter((market) => market.marketType === 'PERP')
   const byName = new Map<string, PerpMarket>()
@@ -43,45 +48,66 @@ export async function main(): Promise<void> {
   let reconnectTimer: NodeJS.Timeout | undefined
   let reconnectDelay = 1_000
   let pollTimer: NodeJS.Timeout | undefined
+  const cooldownUntil = new Map<string, number>()
+  const flatNotified = new Set<string>()
+  const lastFailure = new Map<string, { message: string; at: number }>()
   let connected = false
   let lastEventTime: string | null = null
   const inFlight = new Set<string>()
 
+  // Log a failure once per distinct message, then at most every 5 minutes, instead of every poll.
+  async function logFailure(guard: Guard, reason: string): Promise<void> {
+    const previous = lastFailure.get(guard.id)
+    if (previous && previous.message === reason && Date.now() - previous.at < 300_000) return
+    lastFailure.set(guard.id, { message: reason, at: Date.now() })
+    await eventLog({ timestamp: new Date().toISOString(), kind: 'evaluation_failed', guardId: guard.id, owner: guard.owner, market: guard.market, reason })
+  }
+
   async function evaluate(guard: Guard, reason: string): Promise<void> {
-    const market = byName.get(guard.market)
-    if (!market) {
-      await eventLog({ timestamp: new Date().toISOString(), kind: 'evaluation_failed', guardId: guard.id, owner: guard.owner, market: guard.market, reason: 'Market not found in SDK list' })
-      return
-    }
+    // One evaluation per guard at a time: overlapping polls and events cannot stack or double-fire.
+    if (inFlight.has(guard.id)) return
+    inFlight.add(guard.id)
     try {
+      const market = byName.get(guard.market)
+      if (!market) { await logFailure(guard, 'Market not found in SDK list'); return }
       const position = await readRetry(`client.getPerpPosition(${market.poolAddress}, ${guard.owner})`, () => client.getPerpPosition({ marginBank: market.marginBank, account: guard.owner, pool: market.poolAddress }))
-      const margin = await readRetry(`client.getMarginAccount(${guard.owner})`, () => client.getMarginAccount(market.marginBank, guard.owner))
+      if (position.size === 0n) {
+        // Nothing to guard. Say so once, then wait quietly until a position appears.
+        if (!flatNotified.has(guard.id)) {
+          flatNotified.add(guard.id)
+          await eventLog({ timestamp: new Date().toISOString(), kind: 'position_flat', guardId: guard.id, owner: guard.owner, market: guard.market, reason: 'No open position; waiting' })
+        }
+        lastFailure.delete(guard.id)
+        return
+      }
+      flatNotified.delete(guard.id)
+      if ((cooldownUntil.get(guard.id) ?? 0) > Date.now() || inCooldown(guard)) return
       const state = await readRetry(`client.getPerpState(${market.poolAddress})`, () => client.getPerpState(market.poolAddress))
-      const feed = await readRetry(`client.getPerpFeedStatus(${market.poolAddress})`, () => client.getPerpFeedStatus(market.poolAddress))
-      const liquidation = position.size === 0n ? null : await readRetry(`client.getLiquidationPrice(${market.poolAddress}, ${guard.owner})`, () => client.getLiquidationPrice({ marginBank: market.marginBank, account: guard.owner, pool: market.poolAddress }))
+      const liquidation = guard.trigger.type === 'liquidation_distance_pct'
+        ? await readRetry(`client.getLiquidationPrice(${market.poolAddress}, ${guard.owner})`, () => client.getLiquidationPrice({ marginBank: market.marginBank, account: guard.owner, pool: market.poolAddress }))
+        : null
+      lastFailure.delete(guard.id)
       const mark = Number(formatUnits(state.markPrice, 18))
       const liquidationNumber = liquidation === null ? null : Number(formatUnits(liquidation, 18))
       const before = positionSnapshot(position, liquidation, market)
       const hit = triggered(guard, mark, liquidationNumber)
-      console.log(`POLL/EVAL guard=${guard.id} owner=${guard.owner} market=${guard.market} reason=${reason} mark=${mark} feed=${json(feed)} margin=${json(margin)} triggered=${hit}`)
-      if (!hit || inCooldown(guard)) return
+      if (!hit) return
+      // Cooldown applies in dry run too, otherwise a hit is logged every poll.
+      cooldownUntil.set(guard.id, Date.now() + guard.cooldownSeconds * 1_000)
       const triggerValues = guard.trigger.type === 'mark_price'
         ? { markPrice: mark.toString(), direction: guard.trigger.direction, targetPrice: guard.trigger.price, triggered: hit }
         : { markPrice: mark.toString(), liquidationPrice: liquidationNumber === null ? null : liquidationNumber.toString(), thresholdPct: guard.trigger.thresholdPct, triggered: hit }
       await eventLog({ timestamp: new Date().toISOString(), kind: 'trigger_hit', guardId: guard.id, owner: guard.owner, market: guard.market, reason, before, triggerValues, positionSizeBefore: position.size.toString(), dryRun: DRY_RUN })
-      if (inFlight.has(guard.id)) return
-      inFlight.add(guard.id)
-      try {
-        if (guard.action.type === 'notify_only') {
-          await eventLog({ timestamp: new Date().toISOString(), kind: 'simulated', guardId: guard.id, owner: guard.owner, market: guard.market, reason: 'notify_only action; no transaction required', before, triggerValues, positionSizeBefore: position.size.toString(), computedCloseQuantity: null, priceUsed: null, expireTimestampNs: null, simulationResult: 'not_applicable', dryRun: DRY_RUN })
-          return
-        }
-        await executePartialClose(guard, market, position, before, client, publicClient, inFlight)
-      } finally {
-        inFlight.delete(guard.id)
+      if (guard.action.type === 'notify_only') {
+        await updateGuard(guard.id, (item) => { item.lastTriggeredAt = new Date().toISOString() })
+        await eventLog({ timestamp: new Date().toISOString(), kind: 'simulated', guardId: guard.id, owner: guard.owner, market: guard.market, reason: 'notify_only action; no transaction required', before, triggerValues, positionSizeBefore: position.size.toString(), computedCloseQuantity: null, priceUsed: null, expireTimestampNs: null, simulationResult: 'not_applicable', dryRun: DRY_RUN })
+        return
       }
+      await executePartialClose(guard, market, position, before, client, publicClient)
     } catch (error) {
-      await eventLog({ timestamp: new Date().toISOString(), kind: 'evaluation_failed', guardId: guard.id, owner: guard.owner, market: guard.market, reason: text(error) })
+      await logFailure(guard, text(error))
+    } finally {
+      inFlight.delete(guard.id)
     }
   }
 
@@ -144,17 +170,21 @@ export async function main(): Promise<void> {
     }, delay)
   }
 
-  pollTimer = setInterval(async () => {
+  // Self-scheduling loop: the next poll starts POLL_MS after the previous one FINISHES.
+  async function pollLoop(): Promise<void> {
+    if (stopped) return
     try {
       const current = await active()
       for (const guard of current) await evaluate(guard, '5-second poll')
     } catch (error) {
       console.error(`Poll failed: ${text(error)}`)
     }
-  }, POLL_MS)
+    if (!stopped) pollTimer = setTimeout(pollLoop, POLL_MS)
+  }
+  pollTimer = setTimeout(pollLoop, POLL_MS)
 
   const server = createServer(async (request, response) => {
-    await handleHttp(request, response, active, saveGuards, client, publicClient, perpMarkets, () => ({ connected, lastEventTime, dryRun: DRY_RUN }))
+    await handleHttp(request, response, active, client, publicClient, perpMarkets, () => ({ connected, lastEventTime, dryRun: DRY_RUN }))
   })
   const port = Number(process.env.GUARDIAN_PORT ?? 8787)
   server.listen(port, () => console.log(`Guardian HTTP server listening on ${port}`))
@@ -162,10 +192,11 @@ export async function main(): Promise<void> {
   await new Promise<void>((resolve) => {
     const shutdown = async () => {
       stopped = true
-      if (pollTimer) clearInterval(pollTimer)
+      if (pollTimer) clearTimeout(pollTimer)
       if (reconnectTimer) clearTimeout(reconnectTimer)
       await subscription?.unsubscribe()
       client.stopLive()
+      await closeBot()
       const publicRpc = await publicClient.transport.getRpcClient?.()
       publicRpc?.close()
       server.close()

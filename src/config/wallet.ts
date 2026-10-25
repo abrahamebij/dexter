@@ -28,7 +28,7 @@ export const walletConfig = createConfig(getDefaultConfig({
   appName: 'Dexter',
   appDescription: 'A deliberate risk-control layer for perps trading.',
   appUrl: import.meta.env.VITE_APP_URL ?? window.location.origin,
-  appIcon: `${import.meta.env.VITE_APP_URL ?? window.location.origin}/favicon.svg`,
+  appIcon: `${import.meta.env.VITE_APP_URL ?? window.location.origin}/logo.png`,
   walletConnectProjectId: import.meta.env.VITE_WALLETCONNECT_PROJECT_ID ?? '',
   chains: [somniaTestnet],
 }))

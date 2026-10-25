@@ -5,7 +5,7 @@ export type Guard = {
   trigger: { type: 'liquidation_distance_pct'; thresholdPct: number } | { type: 'mark_price'; direction: 'below' | 'above'; price: number }
   action: { type: 'notify_only' } | { type: 'partial_close'; closePct: 25 | 50 | 75 | 100 }
   cooldownSeconds: number
-  status: 'active' | 'paused' | 'fired'
+  status: 'active' | 'paused' | 'fired' | 'executing'
   createdAt: string
   lastTriggeredAt: string | null
   source: string

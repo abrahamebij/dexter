@@ -1,9 +1,141 @@
-import { useEffect, useState } from 'react'
-import { useAccount } from 'wagmi'
-import { api, resolveOwner } from '../lib/api'
-type EventItem = { timestamp: string; kind: string; market?: string; reason?: string; txHash?: string; explorer?: string; triggerValues?: Record<string, unknown>; positionSizeBefore?: string; computedCloseQuantity?: string | null; priceUsed?: string | null; expireTimestampNs?: string | null; simulationResult?: string; simulationError?: string; dryRun?: boolean }
+import { useEffect, useState } from "react";
+import { useAccount } from "wagmi";
+import { api, resolveOwner } from "../lib/api";
+type EventItem = {
+  timestamp: string;
+  kind: string;
+  market?: string;
+  reason?: string;
+  txHash?: string;
+  explorer?: string;
+  triggerValues?: Record<string, unknown>;
+  positionSizeBefore?: string;
+  computedCloseQuantity?: string | null;
+  priceUsed?: string | null;
+  expireTimestampNs?: string | null;
+  simulationResult?: string;
+  simulationError?: string;
+  dryRun?: boolean;
+};
 export default function Activity() {
-  const { address } = useAccount(); const [events, setEvents] = useState<EventItem[]>([])
-  useEffect(() => { if (!address) return; const load = () => api<EventItem[]>(`/api/events?owner=${resolveOwner(address)}`).then((value) => setEvents([...value].reverse())).catch(() => undefined); load(); const timer = window.setInterval(load, 5_000); return () => window.clearInterval(timer) }, [address])
-  return <div className="space-y-10"><header><p className="text-sm text-subtle">Activity</p><h1 className="mt-3 text-4xl font-medium tracking-[-0.06em]">A record of every decision.</h1><p className="mt-3 max-w-xl text-sm leading-6 text-muted">This is a record of watcher evaluations. DRY_RUN entries are simulations only; an on-chain action is real only when it has a confirmed transaction hash.</p></header>{events.length === 0 ? <div className="rounded-2xl border border-line p-8 text-sm text-muted">No events for this address.</div> : <div className="divide-y divide-line rounded-2xl border border-line">{events.map((event, index) => <div key={`${event.timestamp}-${index}`} className="px-6 py-6"><div className="flex items-center justify-between gap-4"><p className="font-medium">{event.kind}</p><p className="text-xs text-subtle">{event.txHash ? 'Confirmed on chain' : event.dryRun ? 'Simulation only' : 'Evaluation record'}</p></div><p className="mt-1 text-sm text-muted">{event.market ?? ''} {event.reason ?? ''}</p><p className="mt-2 text-xs text-subtle">{new Date(event.timestamp).toLocaleString()}</p><dl className="mt-4 grid gap-2 text-xs text-muted sm:grid-cols-2">{event.triggerValues && <><dt>Trigger values</dt><dd>{JSON.stringify(event.triggerValues)}</dd></>}{event.positionSizeBefore !== undefined && <><dt>Position before</dt><dd>{event.positionSizeBefore}</dd></>}{event.computedCloseQuantity !== undefined && <><dt>Close quantity</dt><dd>{event.computedCloseQuantity ?? 'Not applicable'}</dd></>}{event.priceUsed !== undefined && <><dt>Price used</dt><dd>{event.priceUsed ?? 'Not applicable'}</dd></>}{event.expireTimestampNs !== undefined && <><dt>Expiry</dt><dd>{event.expireTimestampNs ?? 'Not applicable'}</dd></>}{event.simulationResult && <><dt>Simulation</dt><dd>{event.simulationResult}</dd></>}{event.simulationError && <><dt>Simulation error</dt><dd>{event.simulationError}</dd></>}{event.dryRun !== undefined && <><dt>DRY_RUN</dt><dd>{String(event.dryRun)}</dd></>}</dl>{event.txHash && <a className="mt-2 inline-block text-sm underline" href={event.explorer} target="_blank" rel="noreferrer">{event.txHash}</a>}</div>)}</div>}</div>
+  const { address } = useAccount();
+  const [events, setEvents] = useState<EventItem[]>([]);
+  useEffect(() => {
+    if (!address) return;
+    const load = () =>
+      api<EventItem[]>(`/api/events?owner=${resolveOwner(address)}`)
+        .then((value) => setEvents([...value].reverse()))
+        .catch(() => undefined);
+    load();
+    const timer = window.setInterval(load, 5_000);
+    return () => window.clearInterval(timer);
+  }, [address]);
+  return (
+    <div className="space-y-10">
+      <header>
+        <p className="text-sm text-subtle">Activity</p>
+        <h1 className="mt-3 text-4xl font-medium tracking-[-0.06em]">
+          A record of every decision.
+        </h1>
+        <p className="mt-3 max-w-xl text-sm leading-6 text-muted">
+          This is a record of watcher evaluations. DRY_RUN entries are
+          simulations only; an on-chain action is real only when it has a
+          confirmed transaction hash.
+        </p>
+      </header>
+      {events.length === 0 ? (
+        <div className="rounded-2xl border border-line p-8 text-sm text-muted">
+          No events for this address.
+        </div>
+      ) : (
+        <div className="divide-y divide-line rounded-2xl border border-line">
+          {events.map((event, index) => (
+            <div key={`${event.timestamp}-${index}`} className="px-6 py-6">
+              <div className="flex items-center justify-between gap-4">
+                <p className="font-medium">{event.kind}</p>
+                <p className="text-xs text-subtle">
+                  {event.txHash
+                    ? "Confirmed on chain"
+                    : event.dryRun
+                      ? "Simulation only"
+                      : "Evaluation record"}
+                </p>
+              </div>
+              <p className="mt-1 text-sm text-muted">
+                {event.market ?? ""} {event.reason ?? ""}
+              </p>
+              <p className="mt-2 text-xs text-subtle">
+                {new Date(event.timestamp).toLocaleString()}
+              </p>
+              <dl className="mt-4 grid gap-2 text-xs text-muted sm:grid-cols-2">
+                {event.triggerValues && (
+                  <>
+                    <dt>Trigger values</dt>
+                    <dd>{JSON.stringify(event.triggerValues)}</dd>
+                  </>
+                )}
+                {event.positionSizeBefore !== undefined && (
+                  <>
+                    <dt>Position before</dt>
+                    <dd>{event.positionSizeBefore}</dd>
+                  </>
+                )}
+                {event.computedCloseQuantity !== undefined && (
+                  <>
+                    <dt>Close quantity</dt>
+                    <dd>{event.computedCloseQuantity ?? "Not applicable"}</dd>
+                  </>
+                )}
+                {event.priceUsed !== undefined && (
+                  <>
+                    <dt>Price used</dt>
+                    <dd>{event.priceUsed ?? "Not applicable"}</dd>
+                  </>
+                )}
+                {event.expireTimestampNs !== undefined && (
+                  <>
+                    <dt>Expiry</dt>
+                    <dd>{event.expireTimestampNs ?? "Not applicable"}</dd>
+                  </>
+                )}
+                {event.simulationResult && (
+                  <>
+                    <dt>Simulation</dt>
+                    <dd>{event.simulationResult}</dd>
+                  </>
+                )}
+                {event.simulationError && (
+                  <>
+                    <dt>Simulation error</dt>
+                    <dd>{event.simulationError}</dd>
+                  </>
+                )}
+                {event.dryRun !== undefined && (
+                  <>
+                    <dt>DRY_RUN</dt>
+                    <dd>{String(event.dryRun)}</dd>
+                  </>
+                )}
+              </dl>
+              {event.txHash &&
+                (event.explorer ? (
+                  <a
+                    className="mt-2 inline-block text-sm underline"
+                    href={event.explorer}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {event.txHash}
+                  </a>
+                ) : (
+                  <code className="mt-2 inline-block break-all text-sm">
+                    {event.txHash}
+                  </code>
+                ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }

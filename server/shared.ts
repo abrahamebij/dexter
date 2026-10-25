@@ -17,6 +17,7 @@ export const GAS_LIMIT = 10_000_000n
 export const DATA_DIR = fileURLToPath(new URL('./data/', import.meta.url))
 export const GUARDS_FILE = `${DATA_DIR}guards.json`
 export const EVENTS_FILE = `${DATA_DIR}events.json`
+export const EVENTS_JSONL_FILE = `${DATA_DIR}events.jsonl`
 export const COMPILE_CACHE_FILE = `${DATA_DIR}compile-cache.json`
 export const DRY_RUN = process.env.DRY_RUN !== 'false'
 export const POLL_MS = 5_000
@@ -39,7 +40,7 @@ export type Guard = {
   trigger: Trigger
   action: Action
   cooldownSeconds: number
-  status: 'active' | 'paused' | 'fired'
+  status: 'active' | 'paused' | 'fired' | 'executing'
   createdAt: string
   lastTriggeredAt: string | null
   source: string
