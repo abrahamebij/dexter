@@ -1,8 +1,8 @@
-import { createWalletClient, publicActions, webSocket, type Address } from 'viem'
+import { createPublicClient, createWalletClient, publicActions, webSocket, type Address, type Hex } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { hidekiTestnet } from '@somnia-chain/markets-sdk/chains'
 import { ORDER_TYPE, SELF_MATCHING_OPTION } from '@somnia-chain/markets-sdk'
-import { DRY_RUN, GAS_LIMIT, WS_RPC_URL, delegatedOrderAbi, json, readRetry, type Guard, type PerpMarket, type PositionSnapshot, type ProofClient } from './shared.js'
+import { DRY_RUN, GAS_LIMIT, WS_RPC_URL, delegatedOrderAbi, json, readRetry, text, type Guard, type PerpMarket, type PositionSnapshot, type ProofClient } from './shared.js'
 import { eventLog, guards, saveGuards } from './storage.js'
 import { positionSnapshot } from './helpers.js'
 export async function executePartialClose(
@@ -56,7 +56,7 @@ export async function executePartialClose(
     account: botAccount,
   }
   console.log(`Guard close args: ${json({ owner: guard.owner, isBid, quantity: closeQuantity, price, expiry, blockTimestamp: block.timestamp, orderType: ORDER_TYPE.MARKET, selfMatchingOption: SELF_MATCHING_OPTION.CANCEL_TAKER })}`)
-  let simulation: Awaited<ReturnType<typeof bot.simulateContract>>
+  let simulation: any
   try {
     simulation = await bot.simulateContract(request)
   } catch (error) {
@@ -86,4 +86,3 @@ export async function executePartialClose(
   botRpc?.close()
   inFlight.delete(guard.id)
 }
-

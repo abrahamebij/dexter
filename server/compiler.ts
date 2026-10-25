@@ -2,6 +2,28 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { badRequest, COMPILE_CACHE_FILE, COMPILE_SCHEMA_VERSION, DEFAULT_GEMINI_MODEL, GEMINI_DOCS_URL, type Address, type CompiledRule, type PerpMarket, type ProofClient } from './shared.js'
 import { assertRule, currentPositionExists, restate } from './rules.js'
+import { marketName } from './storage.js'
+
+let fallbackPreferredUntil = 0
+export type CompileResult = { rule: CompiledRule; restatement: string; warning?: string; assumptions: string[]; model: string; docsUrl: string; source: 'gemini' | 'cache' | 'manual'; keyUsed?: 'primary' | 'fallback' }
+function compileCacheKey(textInput: string, markets: PerpMarket[]): string {
+  const normalized = textInput.trim().toLowerCase().replace(/\s+/g, ' ')
+  const symbols = markets.map(marketName).sort().join('|')
+  return createHash('sha256').update(`${COMPILE_SCHEMA_VERSION}|${normalized}|${symbols}`).digest('hex')
+}
+async function readCompileCache(): Promise<Record<string, { rule: CompiledRule; model: string }>> {
+  try {
+    const value: unknown = JSON.parse(await readFile(COMPILE_CACHE_FILE, 'utf8'))
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('compile cache must be an object')
+    return value as Record<string, { rule: CompiledRule; model: string }>
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}
+    throw error
+  }
+}
+async function writeCompileCache(cache: Record<string, { rule: CompiledRule; model: string }>): Promise<void> {
+  await writeFile(COMPILE_CACHE_FILE, `${JSON.stringify(cache, null, 2)}\n`, 'utf8')
+}
 export async function compileRule(textInput: string, owner: Address, markets: PerpMarket[], client: ProofClient): Promise<CompileResult> {
   const normalized = textInput.toLowerCase()
   if (/\bstop[- ]loss\b|\btake[- ]profit\b/.test(normalized)) {
@@ -95,4 +117,3 @@ export async function validateManualRule(value: unknown, owner: Address, markets
   if (!hasPosition) assumptions.push('This owner currently has no open position in this market.')
   return { rule: canonicalRule, restatement: restate(canonicalRule), assumptions, ...(warning ? { warning } : {}), model: 'manual', docsUrl: GEMINI_DOCS_URL, source: 'manual' }
 }
-

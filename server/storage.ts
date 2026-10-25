@@ -1,7 +1,10 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { DATA_DIR, GUARDS_FILE, EVENTS_FILE, COMPILE_CACHE_FILE, fallbackNoticePrinted, type EventRecord, type Guard, type ProofClient, json, type PerpMarket } from './shared.js'
+import { DATA_DIR, GUARDS_FILE, EVENTS_FILE, COMPILE_CACHE_FILE, type EventRecord, type Guard, type ProofClient, json, type PerpMarket } from './shared.js'
+import { privateKeyToAccount } from 'viem/accounts'
+import { type Address, type Hex } from 'viem'
+let fallbackNoticePrinted = false
 export async function ensureData(): Promise<void> {
   await mkdir(DATA_DIR, { recursive: true })
   try {
@@ -50,4 +53,13 @@ export async function loadClientFactory(): Promise<(config: unknown) => ProofCli
   const path = `${entry.slice(0, entry.lastIndexOf('\\'))}\\createClient.js`
   const module = await import(pathToFileURL(path).href) as { createClient: (config: unknown) => ProofClient }
   return module.createClient
+}
+
+export function marketName(market: PerpMarket): string {
+  return `${market.baseSymbol ?? market.baseToken}/${market.quoteSymbol ?? market.quoteToken}`
+}
+export function botAccountFromEnv(): Address {
+  const configuredKey = process.env.BOT_PRIVATE_KEY
+  if (!configuredKey) throw new Error('BOT_PRIVATE_KEY is not configured in server/.env')
+  return privateKeyToAccount((configuredKey.startsWith('0x') ? configuredKey : `0x${configuredKey}`) as Hex).address
 }

@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
-import { getAddress, formatUnits } from 'viem'
+import { createPublicClient, getAddress, formatUnits } from 'viem'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { badRequest, readRetry, type Guard, type EventRecord, type PerpMarket, type ProofClient } from './shared.js'
+import { badRequest, readRetry, EVENTS_FILE, parseJsonBody, text, type Guard, type EventRecord, type PerpMarket, type ProofClient } from './shared.js'
 import { verifyAuth, nonceFor } from './auth.js'
 import { allowCompile, assertRule } from './rules.js'
 import { compileRule, validateManualRule } from './compiler.js'
@@ -156,4 +156,3 @@ export async function handleHttp(
     response.end(JSON.stringify({ error: message }))
   }
 }
-

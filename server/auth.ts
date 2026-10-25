@@ -1,7 +1,7 @@
-import { getAddress } from 'viem'
+import { getAddress, type Address, type Hex } from 'viem'
 import { createPublicClient } from 'viem'
 import type { IncomingMessage } from 'node:http'
-import { badRequest, nonces, parseJsonBody, type AuthPayload } from './shared.js'
+import { badRequest, nonces, type AuthPayload, type NonceRecord } from './shared.js'
 export function parseAuth(request: IncomingMessage): AuthPayload {
   const raw = request.headers['x-dexter-auth']
   if (typeof raw !== 'string') throw badRequest('missing x-dexter-auth header')

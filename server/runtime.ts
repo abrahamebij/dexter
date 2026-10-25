@@ -1,10 +1,10 @@
 import { createServer } from 'node:http'
-import { decodeEventLog, createPublicClient, webSocket, type Abi, type Hex } from 'viem'
+import { decodeEventLog, createPublicClient, formatUnits, webSocket, type Abi, type Hex } from 'viem'
 import { SDK as ReactivitySDK } from '@somnia-chain/reactivity'
 import { hidekiTestnet } from '@somnia-chain/markets-sdk/chains'
 import { SOMNIA_HIDEKI_TESTNET_ADDRESSES } from '@somnia-chain/markets-sdk'
 import { DRY_RUN, INDEXER_URL, WS_RPC_URL, MARGIN_BANK, LIQUIDATION_ENGINE, OPERATOR_PERMISSIONS_REGISTRY, POLL_MS, marginAbi, liquidationAbi, readRetry, topic0, json, text, type Guard, type PerpMarket, type ProofClient } from './shared.js'
-import { ensureData, loadClientFactory, marketName, guards, saveGuards } from './storage.js'
+import { ensureData, loadClientFactory, marketName, guards, saveGuards, eventLog } from './storage.js'
 import { ownerInDecoded, positionSnapshot, triggered, inCooldown } from './helpers.js'
 import { executePartialClose } from './executor.js'
 import { handleHttp } from './http.js'
@@ -175,4 +175,3 @@ export async function main(): Promise<void> {
     process.once('SIGTERM', shutdown)
   })
 }
-

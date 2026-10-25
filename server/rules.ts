@@ -1,4 +1,7 @@
-import { badRequest, readRetry, type CompiledRule, type ProofClient, type Trigger, type Action, type PerpMarket } from './shared.js'
+import { createHash } from 'node:crypto'
+import { readFile, writeFile } from 'node:fs/promises'
+import { badRequest, readRetry, COMPILE_CACHE_FILE, COMPILE_SCHEMA_VERSION, compileRate, type Address, type CompiledRule, type ProofClient, type Trigger, type Action, type PerpMarket } from './shared.js'
+import { marketName } from './storage.js'
 export function assertRule(value: unknown, markets: string[]): CompiledRule {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw badRequest('compiled rule must be an object')
   const input = value as Record<string, unknown>
@@ -56,27 +59,4 @@ export function allowCompile(owner: Address): void {
 export async function currentPositionExists(client: ProofClient, owner: Address, market: PerpMarket): Promise<boolean> {
   const positions = await readRetry(`client.listPerpPositions(${owner})`, () => client.listPerpPositions(owner))
   return positions.some((position) => position.pool.toLowerCase() === market.poolAddress.toLowerCase() && BigInt(position.size) !== 0n)
-}
-
-type CompileResult = { rule: CompiledRule; restatement: string; warning?: string; assumptions: string[]; model: string; docsUrl: string; source: 'gemini' | 'cache' | 'manual'; keyUsed?: 'primary' | 'fallback' }
-
-function compileCacheKey(textInput: string, markets: PerpMarket[]): string {
-  const normalized = textInput.trim().toLowerCase().replace(/\s+/g, ' ')
-  const symbols = markets.map(marketName).sort().join('|')
-  return createHash('sha256').update(`${COMPILE_SCHEMA_VERSION}|${normalized}|${symbols}`).digest('hex')
-}
-
-async function readCompileCache(): Promise<Record<string, { rule: CompiledRule; model: string }>> {
-  try {
-    const value: unknown = JSON.parse(await readFile(COMPILE_CACHE_FILE, 'utf8'))
-    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('compile cache must be an object')
-    return value as Record<string, { rule: CompiledRule; model: string }>
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}
-    throw error
-  }
-}
-
-async function writeCompileCache(cache: Record<string, { rule: CompiledRule; model: string }>): Promise<void> {
-  await writeFile(COMPILE_CACHE_FILE, `${JSON.stringify(cache, null, 2)}\n`, 'utf8')
 }
