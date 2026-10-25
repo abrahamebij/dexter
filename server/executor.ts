@@ -2,7 +2,7 @@ import { createPublicClient, createWalletClient, publicActions, webSocket, type 
 import { privateKeyToAccount } from 'viem/accounts'
 import { hidekiTestnet } from '@somnia-chain/markets-sdk/chains'
 import { ORDER_TYPE, SELF_MATCHING_OPTION } from '@somnia-chain/markets-sdk'
-import { DRY_RUN, GAS_LIMIT, WS_RPC_URL, delegatedOrderAbi, json, readRetry, text, type Guard, type PerpMarket, type PositionSnapshot, type ProofClient } from './shared.js'
+import { DRY_RUN, GAS_LIMIT, WS_RPC_URL, delegatedOrderAbi, json, placeOrderForSelector, readRetry, text, type Guard, type PerpMarket, type PositionSnapshot, type ProofClient } from './shared.js'
 import { eventLog, guards, saveGuards } from './storage.js'
 import { positionSnapshot } from './helpers.js'
 export async function executePartialClose(
@@ -17,13 +17,16 @@ export async function executePartialClose(
   const configuredKey = process.env.BOT_PRIVATE_KEY
   if (!configuredKey) throw new Error('BOT_PRIVATE_KEY is required for partial_close')
   const botAccount = privateKeyToAccount((configuredKey.startsWith('0x') ? configuredKey : `0x${configuredKey}`) as Hex)
-  const approved = await readRetry(`client.isApprovedForPool(${market.poolAddress})`, () => client.isApprovedForPool({
+  const approvalArgs = {
     pool: market.poolAddress,
     owner: guard.owner,
     operator: botAccount.address,
-    selector: '0x80054449',
-  }))
-  if (!approved) throw new Error('Bot is not approved for owner and placeOrderFor selector')
+    selector: placeOrderForSelector,
+  } as const
+  console.log(`Approval check: ${json({ storedGuardOwner: guard.owner, owner: approvalArgs.owner, operator: approvalArgs.operator, pool: approvalArgs.pool, selector: approvalArgs.selector })}`)
+  const approved = await readRetry(`client.isApprovedForPool(${approvalArgs.pool})`, () => client.isApprovedForPool(approvalArgs))
+  console.log(`Approval result: ${json({ owner: approvalArgs.owner, operator: approvalArgs.operator, pool: approvalArgs.pool, selector: approvalArgs.selector, rawReturnValue: approved })}`)
+  if (approved !== true) throw new Error('Bot approval read returned false for the requested owner, pool and placeOrderFor selector')
   const current = await readRetry(`client.getPerpPosition(${market.poolAddress}, ${guard.owner})`, () => client.getPerpPosition({ marginBank: market.marginBank, account: guard.owner, pool: market.poolAddress }))
   if (current.size === 0n) throw new Error('Cannot close a flat position')
   const quantity = (current.size < 0n ? -current.size : current.size) * BigInt(guard.action.type === 'partial_close' ? guard.action.closePct : 100) / 100n

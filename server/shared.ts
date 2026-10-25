@@ -3,7 +3,7 @@ import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createHash } from 'node:crypto'
 import { config as loadEnv } from 'dotenv'
-import { formatUnits, getAddress, keccak256, parseAbi, toBytes, type Address, type Hex } from 'viem'
+import { formatUnits, getAddress, keccak256, parseAbi, toBytes, toFunctionSelector, type AbiFunction, type Address, type Hex } from 'viem'
 import { marginBankEventsAbi, liquidationEngineEventsAbi, type PerpMarket, type SomniaMarketsClient } from '@somnia-chain/markets-sdk'
 export type { Address, Hex, PerpMarket, SomniaMarketsClient }
 loadEnv({ path: fileURLToPath(new URL('./.env', import.meta.url)) })
@@ -26,6 +26,7 @@ export const COMPILE_SCHEMA_VERSION = 'guard-rule-v1'
 export const delegatedOrderAbi = parseAbi([
   'function placeOrderFor(address owner, bool isBid, uint64 userData, uint256 price, uint256 quantity, uint64 expireTimestampNs, uint8 orderType, uint8 selfMatchingOption, address builder, uint96 builderFeeBpsTimes1k)',
 ])
+export const placeOrderForSelector = toFunctionSelector(delegatedOrderAbi[0] as AbiFunction)
 
 export type Trigger =
   | { type: 'liquidation_distance_pct'; thresholdPct: number }
