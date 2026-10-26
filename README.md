@@ -1,106 +1,311 @@
-# Dexter
+<a id="top"></a>
 
-**A position guardian for dreamDEX perps on Somnia Tokyo testnet.**
+<h1 align="center">Dexter</h1>
 
-You describe a protection rule in plain English. Dexter turns it into a strictly validated rule, watches your position, and when the rule triggers it either notifies you or places a **partial close** from a bot key you have linked to your wallet. Every action leaves a transaction hash and a record you can check.
+<p align="center">
+  <strong>Protect a perps position before it reaches liquidation.</strong><br>
+  Describe a rule in plain English, review it, and let a constrained guardian notify you or partially close the live position.
+</p>
 
-Built for the dreamDEX Perps Builder Bounty (MVP track, bots and agents category).
+<p align="center">
+  <a href="#x-running-it"><strong>Run it locally ↗</strong></a>
+  &nbsp; · &nbsp;
+  <a href="#xi-what-works-today">What works today</a>
+  &nbsp; · &nbsp;
+  <a href="#ix-repository-map">Repository map</a>
+</p>
 
-> Dexter does **not** place stop-loss or take-profit orders. A linked bot key cannot place reduce-only TP/SL on dreamDEX. A Dexter guard watches the position itself and sends a normal partial-close order when its condition is met.
+<p align="center">
+  <sub>SOMNIA TOKYO / DREAMDEX PERPS / REACTIVITY / REACT + VITE</sub>
+</p>
 
-## What it does
+---
 
-- **Plain-English guards.** "Close 25% of my ETH position if price drops below 2400." A Gemini model compiles the text into a fixed rule schema. The server validates it, restates it in plain English from a template (not from the model), and lists every value you did not state as an assumption before you confirm.
-- **Manual rule builder.** The same rules can be built from a form. It uses the same validation, confirmation and signature flow, so Dexter works when the AI is unavailable.
-- **Two triggers.** Liquidation distance (percent) and mark price (above or below a level).
-- **Two actions.** Notify only, or partial close of 25, 50, 75 or 100 percent of the live position.
-- **Reactivity plus polling.** Somnia Reactivity pushes position, margin, funding and liquidation events from MarginBank and LiquidationEngine, and Dexter re-evaluates immediately. Mark price changes emit no event, so mark price and liquidation distance are also checked every 5 seconds.
-- **Live positions, bot permissions and an activity log** in the web app, all read from the chain through the dreamDEX SDK.
+Dexter is a position guardian for dreamDEX perpetuals on Somnia Tokyo/Hideki
+testnet. It is not a general trading bot. A guard contains one supported
+trigger and one supported action, is validated before it is saved, and is
+evaluated against the owner's live position.
 
-## Who it is for
+> **Dexter does not place stop-loss or take-profit orders.**
+>
+> A linked bot key cannot place reduce-only TP/SL on dreamDEX. When a partial
+> close guard fires, Dexter prepares a bounded normal order for the live
+> position. Dry-run mode is the default and never broadcasts a transaction.
 
-Perps traders who want a risk rule they can say out loud, a bot that is limited to placing orders for their wallet, and a record of exactly what the bot did and why.
+| What the guardian observes | What it can do |
+| :--- | :--- |
+| Liquidation distance and mark price | Notify only |
+| Position, margin, funding and liquidation events | Partially close 25%, 50%, 75% or 100% |
+| Market limits, lot size and current order-book levels | Pause a guard after a failed execution |
 
-## How it works
+<details>
+<summary><strong>Contents — the product, the engineering, the boundaries</strong></summary>
 
+| | Chapter | |
+| :--- | :--- | :--- |
+| 01 | [The gap](#i-the-gap) | Why a position needs a guardian |
+| 02 | [The one idea](#ii-the-one-idea) | A rule that says exactly what may happen |
+| 03 | [Architecture](#iii-the-shape) | A web app and a persistent worker |
+| 04 | [The life of a guard](#iv-the-life-of-a-guard) | Compile, confirm, authenticate, watch |
+| 05 | [The rule model](#v-the-rule-model) | The small language Dexter accepts |
+| 06 | [The execution boundary](#vi-the-execution-boundary) | Read, approve, simulate, send |
+| 07 | [Safety](#vii-safety) | Defaults, keys and failure behavior |
+| 08 | [Repository map](#viii-the-map) | Where the moving parts live |
+| 09 | [Run locally](#ix-running-it) | Install, configure, run |
+| 10 | [What works today](#x-what-is-true-and-what-is-not) | Observed, limited and absent |
+| 11 | [Stack](#xi-stack) | The libraries and chain layer |
+
+</details>
+
+---
+
+<a id="i-the-gap"></a>
+
+## 01 · The gap
+
+A perps position can move faster than its owner can watch it. A trader may know
+the price or liquidation distance that matters, but still have to be awake,
+online and ready to act when it arrives.
+
+The usual answer is a stop-loss or take-profit order. That is not the answer
+available to a linked dreamDEX session key: reduce-only TP/SL does not work with
+that key. Dexter takes the narrower path instead:
+
+**watch the position off-chain, validate one explicit rule, and make one
+bounded partial-close attempt when the condition is true.**
+
+That narrower scope is deliberate. Dexter does not decide what a trader should
+do, does not invent an unsupported rule, and does not turn an ambiguous request
+into a trade.
+
+<a id="ii-the-one-idea"></a>
+
+## 02 · The one idea
+
+> **Say the condition. Review the consequence. Keep the bot constrained.**
+
+The user connects a wallet, names the DreamDEX smart wallet that owns the perps
+account, and creates a guard either from plain English or from the manual
+builder. Dexter shows the normalized rule, deterministic restatement, warnings
+and assumptions before the user signs.
+
+- **A small rule language.** Only liquidation-distance and mark-price triggers
+  are accepted.
+- **Two explicit actions.** Notify, or close a fixed percentage of the live
+  position.
+- **No silent translation.** Unsupported or ambiguous input is rejected.
+- **A visible boundary.** Every activity record distinguishes evaluation,
+  simulation, failure and a confirmed transaction.
+
+<a id="iii-the-shape"></a>
+
+## 03 · Architecture
+
+The guardian is a separate long-running Node process because Reactivity needs a
+persistent WebSocket connection. The browser remains the control surface; the
+server owns chain reads, rule evaluation and the optional bot key.
+
+| Surface | Location | Role |
+| :--- | :--- | :--- |
+| **Web app** | [`src/`](src/) | Wallet connection, dashboard, positions, guard creation, permissions, activity and security |
+| **Guardian worker** | [`server/`](server/) | Reactivity subscriptions, polling, evaluations, execution and HTTP API |
+| **Runtime data** | [`server/data/`](server/data/) | Local guard, event and compile-cache JSON files |
+| **Chain layer** | `@somnia-chain/markets-sdk` | Markets, positions, permissions, margin and order-size reads |
+| **Event layer** | `@somnia-chain/reactivity` | MarginBank and LiquidationEngine subscriptions |
+
+```mermaid
+flowchart LR
+    browser["React + Vite<br/>wallet and guard UI"]
+    api["Guardian HTTP API<br/>authentication and validation"]
+    compiler["Rule compiler<br/>Gemini or manual builder"]
+    worker["Persistent guardian<br/>events + 5 second poll"]
+    sdk["@somnia-chain/markets-sdk"]
+    chain["Somnia Tokyo<br/>dreamDEX Perps"]
+    bot["Linked bot key<br/>server only"]
+
+    browser --> api
+    api --> compiler
+    api --> worker
+    worker --> sdk
+    sdk --> chain
+    worker --> bot
+    bot --> chain
 ```
-Plain English or form  ->  rule schema  ->  server validation  ->  you confirm and sign
-                                                                        |
-Reactivity events (MarginBank, LiquidationEngine) + 5 second poll  ->  trigger check
-                                                                        |
-   approval check -> size to lot size -> max size check -> simulate -> send -> verify position
+
+<a id="iv-the-life-of-a-guard"></a>
+
+## 04 · The life of a guard
+
+| Stage | Where | What it establishes |
+| :--- | :--- | :--- |
+| **01 · Connect** | Browser | The signer can authenticate requests |
+| **02 · Compile** | Guardian API | Natural language becomes the fixed rule schema |
+| **03 · Review** | Browser | The user sees the rule, assumptions and warnings |
+| **04 · Sign** | Browser | A single-use nonce proves control or authority over the owner |
+| **05 · Save** | Guardian API | The verified DreamDEX wallet becomes the guard owner |
+| **06 · Watch** | Guardian worker | Events and five-second polling re-evaluate active guards |
+| **07 · Act** | Guardian worker | Notify, simulate, or send according to the guard action |
+
+The owner is the DreamDEX smart-wallet address holding the perps account, not
+necessarily the connected EOA signer. The server verifies the relationship
+before accepting a mutating request.
+
+<a id="v-the-rule-model"></a>
+
+## 05 · The rule model
+
+Dexter accepts this model and no broader one:
+
+```ts
+trigger:
+  | { type: "liquidation_distance_pct"; thresholdPct: number }
+  | { type: "mark_price"; direction: "below" | "above"; price: number }
+
+action:
+  | { type: "notify_only" }
+  | { type: "partial_close"; closePct: 25 | 50 | 75 | 100 }
+
+cooldownSeconds: number
 ```
 
-For a partial close the executor, in this order: checks the bot is approved for your wallet on that pool (`isApprovedForPool`), reads the live position, sizes the close to the market lot size and never above the position, checks the maximum order size, builds a bounded market order with a future expiry taken from the latest block time, simulates it with `eth_call`, and only then sends it.
+Each stored guard also has an id, owner, market, lifecycle status, source,
+timestamps and the original source text when it came from the AI compiler.
+Partial-close guards fire once and become `fired`; notify-only guards may run
+again after their cooldown.
 
-## Safety model
+<a id="vi-the-execution-boundary"></a>
 
-- **Dry run by default.** The server simulates only, unless `DRY_RUN` is exactly `false`.
-- **The bot key can only act for wallets that linked it** with Link a Bot in the dreamDEX app. It cannot withdraw funds.
-- **The guard is claimed before anything is sent.** A failed send pauses the guard for manual review. A transaction with an unconfirmed receipt is never resent automatically. A restart pauses any guard that was mid-execution.
-- **Secrets stay on the server.** The bot key and Gemini keys live only in `server/.env`. Nothing secret uses a `VITE_` prefix.
-- **Signed ownership.** Creating or changing a guard needs a single-use nonce, a signature, and proof that the signer controls the guarded wallet. The server accepts the wallet itself, or any signer the dreamDEX SDK reports as having authority over that smart wallet. The bot's own address is rejected as an owner.
-- **No fake data.** Empty states are empty. The activity log is an append-only file written through one queue.
+## 06 · The execution boundary
 
-## Run it
+For a partial close, the worker follows the same sequence every time:
+
+```text
+approval check
+    -> read the live position
+    -> align quantity to the market lot size
+    -> cap it at the live position
+    -> check getMaxPerpOrderSize
+    -> build a bounded market order
+    -> simulate with eth_call
+    -> send only when DRY_RUN=false
+    -> wait for the receipt and re-read the position
+```
+
+The approval check uses `isApprovedForPool` for the owner, operator, pool and
+the verified `placeOrderFor` selector. Market addresses, decimals, lot sizes,
+tick sizes and quote tokens come from `client.listPerpMarkets()` at runtime.
+The worker derives expiry from the latest RPC block timestamp and never retries
+a transaction send.
+
+Reactivity covers position, margin, funding and liquidation events. Mark-price
+changes do not provide a suitable event, so the worker also checks active guards
+every five seconds. Reconnects use backoff and trigger a fresh read of active
+positions.
+
+<a id="vii-safety"></a>
+
+## 07 · Safety
+
+- **Dry run by default.** `DRY_RUN` must be exactly `false` before a send is
+  possible.
+- **Server-only secrets.** `BOT_PRIVATE_KEY` and Gemini keys belong in
+  `server/.env`; they are never exposed through a `VITE_` variable.
+- **No withdrawal power.** The linked bot is used for the constrained delegated
+  order path, not for withdrawing user funds.
+- **Claim before send.** A guard is claimed before execution. A failed send
+  pauses it for review, and an unconfirmed transaction is never resent
+  automatically.
+- **Authenticated changes.** Mutating routes require a single-use nonce,
+  signature and verified owner.
+- **No fake data.** The app reads live API data and uses empty states when
+  nothing exists.
+- **Local persistence.** Guards and event records are JSON files for this
+  single-process demo, not a hosted multi-tenant service.
+
+<a id="viii-the-map"></a>
+
+## 08 · Repository map
+
+| File | Responsibility |
+| :--- | :--- |
+| [`src/App.tsx`](src/App.tsx) | App routes and shell |
+| [`src/pages/`](src/pages/) | Home, dashboard, positions, guards, activity, permissions and security |
+| [`server/runtime.ts`](server/runtime.ts) | Startup, subscriptions, polling, reconnects and evaluations |
+| [`server/executor.ts`](server/executor.ts) | Approval, sizing, simulation and optional partial-close submission |
+| [`server/http.ts`](server/http.ts) | Guardian API routes |
+| [`server/auth.ts`](server/auth.ts) | Nonces, signatures and owner authentication |
+| [`server/compiler.ts`](server/compiler.ts) | Gemini compilation, caching and manual validation |
+| [`server/rules.ts`](server/rules.ts) | Rule schema and deterministic restatements |
+| [`server/storage.ts`](server/storage.ts) | JSON persistence and event records |
+| [`server/shared.ts`](server/shared.ts) | Shared types, ABIs, retries and chain helpers |
+| [`PROJECT_BRIEF.md`](PROJECT_BRIEF.md) | Detailed behavior and implementation notes |
+
+<a id="ix-running-it"></a>
+
+## 09 · Run locally
 
 Requirements: Node 20.19+ (or 22.12+) and pnpm.
 
 ```bash
 pnpm install
-cp .env.example .env
-cp server/.env.example server/.env
+copy .env.example .env
 ```
 
-One-time dreamDEX setup (testnet, nothing real):
+Create `server/.env` and configure the required server values there:
+`BOT_PRIVATE_KEY`, `DRY_RUN`, and, when using the AI compiler,
+`GEMINI_API_KEY` (with optional `GEMINI_API_KEY_FALLBACK` and `GEMINI_MODEL`).
+Use a separate bot key, fund its address with a small amount of STT for gas,
+and link that bot address to the DreamDEX wallet in the dreamDEX app. A Gemini
+key is optional when using the manual builder.
 
-1. Open app.testnet.dreamdex.io, sign in, and join the Perps Arena.
-2. Claim the 1,000 paper USDso, then move it to your **Perps account** with Perps ⇆ Spot. Perp orders only use margin that is already in the Perps account.
-3. Create a **separate new key** for the bot. Put it in `server/.env` as `BOT_PRIVATE_KEY`. Fund its address with a little STT for gas. Never use your main wallet's key.
-4. In the dreamDEX app, use **Link a Bot** to link the bot's address to your wallet.
-5. Open a small long in a market the paper credit allows (for example ETH-PERP), so there is a position to guard.
-6. Add a Gemini key as `GEMINI_API_KEY` in `server/.env` (optional if you only use the manual builder).
-
-Start both processes:
+Start the two processes:
 
 ```bash
-pnpm guardian   # guardian server on port 8787
-pnpm dev        # web app on port 5173
+pnpm guardian   # guardian API on port 8787
+pnpm dev        # Vite app on port 5173
 ```
 
-In the app, connect a wallet, enter your **DreamDEX wallet address** as the owner, and create a guard. It stays in simulation until you set `DRY_RUN=false` in `server/.env` and restart the guardian.
+In the app, connect a wallet, enter the DreamDEX smart-wallet address that owns
+the perps account, and create a guard. It remains simulation-only until
+`DRY_RUN=false` is set in `server/.env` and the guardian is restarted.
 
 Useful checks:
 
 ```bash
 pnpm typecheck:server
-pnpm build
 ```
 
-## Evidence
+<a id="x-what-is-true-and-what-is-not"></a>
 
-Real transactions sent by the guardian are listed in [`evidence/tx-log.md`](evidence/tx-log.md) with hashes and position changes. Simulations are shown on the Activity page and are not counted as transactions.
+## 10 · What works today
 
-## Feedback
+| Observed or implemented | Boundary |
+| :--- | :--- |
+| Manual and Gemini-assisted guard creation | Gemini is an off-chain compiler; Somnia Agents are not live on this testnet |
+| Reactivity subscriptions plus five-second polling | This is a local, single-process worker |
+| Approval checks, lot-size sizing and `eth_call` simulation | Real sends require an explicitly configured bot key and `DRY_RUN=false` |
+| Live positions, permissions, guard state and activity records | Empty states are expected when the owner has no data |
+| Partial-close action with receipt verification | This is not a general trading bot or a stop-loss/TP implementation |
+| Somnia Tokyo/Hideki testnet integration | Dexter has not been tested or deployed on mainnet |
 
-Issues found while building against the dreamDEX perps API and SDK are in [`feedback/`](feedback/), one file per issue, using [`feedback/TEMPLATE.md`](feedback/TEMPLATE.md).
+The network values are fixed for the testnet integration:
 
-## X posts
+| Service | Value |
+| :--- | :--- |
+| Chain ID | `50383` |
+| RPC | `https://api.hideki2.infra.testnet.somnia.network` |
+| WebSocket | `wss://api.hideki2.infra.testnet.somnia.network/ws` |
+| Indexer | `https://hideki-dev.smk.somnia.host/v1/graphql` |
+| Gas coin | `STT` |
+| Explorer | `https://explorer.testnet.somnia.network/tokyo` |
 
-Posts about Dexter that tag @DreamDEXSomnia:
+<a id="xi-stack"></a>
 
-1. (add link)
-2. (add link)
-3. (add link)
+## 11 · Stack
 
-## Limits
+React 19, Vite 8, Tailwind CSS 4, React Router, wagmi, ConnectKit and viem
+power the app. The guardian uses Node, TypeScript, `tsx` and dotenv.
+Chain access uses `@somnia-chain/markets-sdk` 0.32.1 and
+`@somnia-chain/reactivity` 0.2.1.
 
-- Testnet only. Dexter has not been tested on mainnet.
-- Somnia Agents are not live on Somnia Tokyo testnet, so the rule compiler uses an off-chain Gemini call.
-- A guard with a partial-close action fires once and is then marked fired. Notify-only guards can repeat after their cooldown.
-- Guards and logs are stored in local files under `server/data/`. This is a single-process demo, not a hosted service.
-- Whether a signer controls a smart wallet is decided by the dreamDEX SDK's account authority read.
-
-## Stack
-
-React, Vite, Tailwind, wagmi and ConnectKit for the app. Node and TypeScript for the guardian. `@somnia-chain/markets-sdk` 0.32.1 and `@somnia-chain/reactivity` 0.2.1 for chain access.
+[Back to top](#top)
