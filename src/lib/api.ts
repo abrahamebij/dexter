@@ -10,6 +10,11 @@ export type Guard = {
   lastTriggeredAt: string | null
   source: string
 }
+export type AuthorityResult = { hasAuthority: boolean; through: string[] | null }
+
+export function ownerStorageKey(signer: string): string {
+  return `dexter.owner:${signer.toLowerCase()}`
+}
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
@@ -36,8 +41,8 @@ export function ruleText(guard: Pick<Guard, 'market' | 'trigger' | 'action'>): s
 }
 
 export function resolveOwner(connectedAddress?: string): string {
-  if (typeof window !== 'undefined') return window.localStorage.getItem('dexter.owner') ?? connectedAddress ?? ''
-  return connectedAddress ?? ''
+  if (!connectedAddress || typeof window === 'undefined') return ''
+  return window.localStorage.getItem(ownerStorageKey(connectedAddress)) ?? ''
 }
 
 export async function authenticatedRequest<T>(path: string, owner: string, signMessage: (message: string) => Promise<`0x${string}`>, init: RequestInit = {}): Promise<T> {

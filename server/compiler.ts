@@ -128,7 +128,7 @@ export async function compileRule(textInput: string, owner: Address, markets: Pe
     }
     throw lastError ?? new Error('Gemini request failed')
   }
-  let result: { response: Response; keyUsed: 'primary' | 'fallback' }
+  let result: { response: Response; body: string; keyUsed: 'primary' | 'fallback' }
   const preferredFallback = fallbackKey && fallbackPreferredUntil > Date.now()
   try {
     result = preferredFallback ? await requestWithKey(fallbackKey, 1) : await requestWithKey(primaryKey, 3)

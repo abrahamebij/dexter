@@ -2,7 +2,7 @@ import { NavLink, Outlet } from 'react-router'
 import { ConnectKitButton } from 'connectkit'
 import { FiActivity, FiGrid, FiKey, FiTrendingUp } from 'react-icons/fi'
 import { useEffect, useState } from 'react'
-import { api } from '../lib/api'
+import { api, ownerStorageKey, type AuthorityResult } from '../lib/api'
 import { useAccount } from 'wagmi'
 
 const navigation = [
@@ -15,7 +15,8 @@ const navigation = [
 export default function AppShell() {
   const { address } = useAccount()
   const [health, setHealth] = useState<{ connected: boolean; dryRun: boolean } | null>(null)
-  const [owner, setOwner] = useState(() => window.localStorage.getItem('dexter.owner') ?? address ?? '')
+  const [owner, setOwner] = useState('')
+  const [accountError, setAccountError] = useState('')
 
   useEffect(() => {
     let active = true
@@ -24,6 +25,32 @@ export default function AppShell() {
     const timer = window.setInterval(load, 5_000)
     return () => { active = false; window.clearInterval(timer) }
   }, [])
+  useEffect(() => {
+    if (!address) {
+      setOwner('')
+      setAccountError('')
+      return
+    }
+    const stored = window.localStorage.getItem(ownerStorageKey(address))
+    if (!stored) {
+      setOwner('')
+      setAccountError('')
+      return
+    }
+    api<AuthorityResult>(`/api/authority?account=${encodeURIComponent(stored)}&signer=${encodeURIComponent(address)}`)
+      .then((result) => {
+        if (result.hasAuthority) setOwner(stored)
+        else {
+          window.localStorage.removeItem(ownerStorageKey(address))
+          setOwner('')
+          setAccountError('The saved DreamDEX wallet is no longer verified for this connected wallet.')
+        }
+      })
+      .catch((error) => {
+        setOwner('')
+        setAccountError(error instanceof Error ? error.message : String(error))
+      })
+  }, [address])
 
   return (
     <div className="min-h-screen bg-canvas text-ink">
@@ -34,7 +61,7 @@ export default function AppShell() {
             Dexter
           </NavLink>
           <div className="flex items-center gap-4">
-            <div className="hidden items-center gap-3 lg:flex"><input aria-label="DreamDEX wallet owner" value={owner} onChange={(event) => { setOwner(event.target.value); window.localStorage.setItem('dexter.owner', event.target.value) }} placeholder={address ?? 'DreamDEX wallet'} className="w-40 border-b border-line bg-transparent px-1 py-1 text-xs font-mono outline-none focus:border-accent" /><span className="text-xs text-muted">{health ? `${health.connected ? 'Watcher connected' : 'Watcher offline'} · ${health.dryRun ? 'Dry run on' : 'Live execution'}` : 'Watcher unavailable'}</span></div>
+            <div className="hidden items-center gap-3 lg:flex"><span className="text-xs text-muted">{owner ? `Guarding ${owner.slice(0, 6)}…${owner.slice(-4)}` : accountError || 'No verified DreamDEX wallet'}</span><span className="text-xs text-muted">{health ? `${health.connected ? 'Watcher connected' : 'Watcher offline'} · ${health.dryRun ? 'Dry run on' : 'Live execution'}` : 'Watcher unavailable'}</span></div>
             <ConnectKitButton />
           </div>
         </div>

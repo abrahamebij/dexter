@@ -68,6 +68,9 @@ export type EventRecord = {
 }
 export type ProofClient = SomniaMarketsClient & {
   listPerpMarkets: (options?: { baseSymbol?: string; quoteSymbol?: string; limit?: number }) => Promise<PerpMarket[]>
+  accounts: {
+    authorityPath: (account: Address, signer: Address) => Promise<readonly Address[] | null>
+  }
 }
 export type AuthPayload = { message: string; signature: Hex; owner: Address }
 export type CompiledRule = { market: string; trigger: Trigger; action: Action; cooldownSeconds: number }

@@ -93,6 +93,16 @@ export async function handleHttp(
       response.end(JSON.stringify({ owner, nonce: record.nonce, expiresAt: new Date(record.expiresAt).toISOString(), message: `Dexter authorization\nOwner: ${owner}\nNonce: ${record.nonce}\nExpiry: ${record.expiresAt}` }))
       return
     }
+    if (request.method === 'GET' && url.pathname === '/api/authority') {
+      const accountValue = url.searchParams.get('account')
+      const signerValue = url.searchParams.get('signer')
+      if (!accountValue || !signerValue) throw badRequest('account and signer are required')
+      const account = getAddress(accountValue)
+      const signer = getAddress(signerValue)
+      const through = await readRetry(`client.accounts.authorityPath(${account}, ${signer})`, () => client.accounts.authorityPath(account, signer))
+      response.end(JSON.stringify({ hasAuthority: through !== null, through }))
+      return
+    }
     if (request.method === 'GET' && url.pathname === '/api/markets') {
       response.end(JSON.stringify({ markets: markets.map(marketName).sort() }))
       return
