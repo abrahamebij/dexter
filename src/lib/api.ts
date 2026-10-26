@@ -16,8 +16,10 @@ export function ownerStorageKey(signer: string): string {
   return `dexter.owner:${signer.toLowerCase()}`
 }
 
+const apiBaseUrl = (import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '')
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init)
+  const response = await fetch(`${apiBaseUrl}${path}`, init)
   const body = await response.text()
   let payload: (T & { error?: string }) | null = null
   if (body.trim()) {

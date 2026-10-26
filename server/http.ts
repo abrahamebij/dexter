@@ -18,6 +18,20 @@ export async function handleHttp(
   health: () => { connected: boolean; lastEventTime: string | null; dryRun: boolean },
 ): Promise<void> {
   response.setHeader('content-type', 'application/json')
+  response.setHeader('x-content-type-options', 'nosniff')
+  response.setHeader('cache-control', 'no-store')
+  const allowedOrigin = process.env.CORS_ORIGIN
+  if (allowedOrigin) {
+    response.setHeader('access-control-allow-origin', allowedOrigin)
+    response.setHeader('vary', 'Origin')
+  }
+  response.setHeader('access-control-allow-headers', 'content-type, x-dexter-auth')
+  response.setHeader('access-control-allow-methods', 'GET, POST, PATCH, OPTIONS')
+  if (request.method === 'OPTIONS') {
+    response.statusCode = 204
+    response.end()
+    return
+  }
   const url = new URL(request.url ?? '/', 'http://localhost')
   try {
     if (request.method === 'GET' && url.pathname === '/api/health') {

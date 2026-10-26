@@ -4,7 +4,7 @@ import { SDK as ReactivitySDK } from '@somnia-chain/reactivity'
 import { hidekiTestnet } from '@somnia-chain/markets-sdk/chains'
 import { SOMNIA_HIDEKI_TESTNET_ADDRESSES } from '@somnia-chain/markets-sdk'
 import { DRY_RUN, INDEXER_URL, WS_RPC_URL, MARGIN_BANK, LIQUIDATION_ENGINE, OPERATOR_PERMISSIONS_REGISTRY, POLL_MS, marginAbi, liquidationAbi, readRetry, topic0, json, text, type Guard, type PerpMarket, type ProofClient } from './shared.js'
-import { ensureData, loadClientFactory, marketName, guards, updateGuard, eventLog } from './storage.js'
+import { ensureData, loadClientFactory, marketName, guards, updateGuard, eventLog, closeStorage } from './storage.js'
 import { ownerInDecoded, positionSnapshot, triggered, inCooldown } from './helpers.js'
 import { executePartialClose, closeBot } from './executor.js'
 import { handleHttp } from './http.js'
@@ -190,7 +190,7 @@ export async function main(): Promise<void> {
   const server = createServer(async (request, response) => {
     await handleHttp(request, response, active, client, publicClient, perpMarkets, () => ({ connected, lastEventTime, dryRun: DRY_RUN }))
   })
-  const port = Number(process.env.GUARDIAN_PORT ?? 8787)
+  const port = Number(process.env.PORT ?? process.env.GUARDIAN_PORT ?? 8787)
   server.listen(port, () => console.log(`Guardian HTTP server listening on ${port}`))
   await subscribe()
   await new Promise<void>((resolve) => {
@@ -203,6 +203,7 @@ export async function main(): Promise<void> {
       await closeBot()
       const publicRpc = await publicClient.transport.getRpcClient?.()
       publicRpc?.close()
+      await closeStorage()
       server.close()
       resolve()
     }

@@ -275,6 +275,38 @@ Useful checks:
 pnpm typecheck:server
 ```
 
+### Deploying the app
+
+Deploy the Vite frontend as a Vercel project rooted at this repository. Vercel
+uses [`vercel.json`](vercel.json) to build `dist/` and route client-side
+navigation back to `index.html`.
+
+Set these Vercel environment variables:
+
+```text
+VITE_APP_URL=https://your-vercel-domain
+VITE_API_URL=https://your-railway-worker-domain
+VITE_WALLETCONNECT_PROJECT_ID=your_project_id
+```
+
+Deploy the guardian as a separate Railway service from the same repository.
+Railway uses [`railway.json`](railway.json) to run the persistent worker and
+expose its health check at `/api/health`. Add a Railway PostgreSQL service and
+set these worker variables:
+
+```text
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+CORS_ORIGIN=https://your-vercel-domain
+BOT_PRIVATE_KEY=your_server_only_bot_key
+DRY_RUN=true
+GEMINI_API_KEY=your_server_only_gemini_key
+```
+
+Set `DRY_RUN=false` only after verifying the Railway worker health endpoint,
+the bot balance, market permissions and a simulated partial close. Never add
+`BOT_PRIVATE_KEY`, `DATABASE_URL` or `GEMINI_API_KEY` to Vercel or any
+`VITE_` variable.
+
 <a id="x-what-is-true-and-what-is-not"></a>
 
 ## 10 · What works today
