@@ -12,7 +12,7 @@ export default function AuthShield() {
         <div className="w-full max-w-md text-center">
           <Link to="/" className="mx-auto flex w-fit items-center gap-2 text-lg font-semibold tracking-[-0.04em]">
             <img src="/logo.png" alt="" className="h-7 w-7" />
-            dexter
+            Dexter
           </Link>
           <div className="mt-16 rounded-2xl border border-line bg-panel p-8 sm:p-10">
             <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-accent-soft text-accent"><FiLock /></span>

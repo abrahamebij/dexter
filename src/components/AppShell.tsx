@@ -31,7 +31,7 @@ export default function AppShell() {
         <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-5 lg:px-10">
           <NavLink to="/" className="flex items-center gap-2 text-lg font-semibold tracking-[-0.04em]">
             <img src="/logo.png" alt="" className="h-7 w-7" />
-            dexter
+            Dexter
           </NavLink>
           <div className="flex items-center gap-4">
             <div className="hidden items-center gap-3 lg:flex"><input aria-label="DreamDEX wallet owner" value={owner} onChange={(event) => { setOwner(event.target.value); window.localStorage.setItem('dexter.owner', event.target.value) }} placeholder={address ?? 'DreamDEX wallet'} className="w-40 border-b border-line bg-transparent px-1 py-1 text-xs font-mono outline-none focus:border-accent" /><span className="text-xs text-muted">{health ? `${health.connected ? 'Watcher connected' : 'Watcher offline'} · ${health.dryRun ? 'Dry run on' : 'Live execution'}` : 'Watcher unavailable'}</span></div>
