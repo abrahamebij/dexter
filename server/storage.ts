@@ -1,5 +1,6 @@
 import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { DATA_DIR, GUARDS_FILE, EVENTS_FILE, COMPILE_CACHE_FILE, EVENTS_JSONL_FILE, type EventRecord, type Guard, type ProofClient, json, type PerpMarket } from './shared.js'
 import { privateKeyToAccount } from 'viem/accounts'
@@ -112,7 +113,7 @@ export async function readEvents(owner?: string | null): Promise<EventRecord[]> 
 export async function loadClientFactory(): Promise<(config: unknown) => ProofClient> {
   const require = createRequire(import.meta.url)
   const entry = require.resolve('@somnia-chain/markets-sdk')
-  const path = `${entry.slice(0, entry.lastIndexOf('\\'))}\\createClient.js`
+  const path = join(dirname(entry), 'createClient.js')
   const module = await import(pathToFileURL(path).href) as { createClient: (config: unknown) => ProofClient }
   return module.createClient
 }

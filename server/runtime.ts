@@ -125,18 +125,22 @@ export async function main(): Promise<void> {
       topicOverrides: topics,
       onlyPushChanges: false,
       onData: async (notification: { params?: { result?: { topics: Hex[]; data: Hex; simulationResults: Hex[] } } }) => {
-        const payload = notification.params?.result
-        if (!payload) return
-        const entry = eventAbiByTopic.get(payload.topics[0]?.toLowerCase())
-        if (!entry) return
-        const decoded = decodeEventLog({ abi: entry, data: payload.data, topics: payload.topics as [Hex, ...Hex[]] })
-        const args = decoded.args as unknown as Record<string, unknown>
-        const owner = ownerInDecoded(args)
-        lastEventTime = new Date().toISOString()
-        const current = await active()
-        const relevant = current.filter((guard) => owner !== null && guard.owner.toLowerCase() === owner.toLowerCase())
-        console.log(`DECODED event=${decoded.eventName} owner=${owner ?? 'none'} relevantGuards=${relevant.length} topics=${json(payload.topics)} args=${json(args)}`)
-        for (const guard of relevant) await evaluate(guard, `event:${decoded.eventName}`)
+        try {
+          const payload = notification.params?.result
+          if (!payload) return
+          const entry = eventAbiByTopic.get(payload.topics[0]?.toLowerCase())
+          if (!entry) return
+          const decoded = decodeEventLog({ abi: entry, data: payload.data, topics: payload.topics as [Hex, ...Hex[]] })
+          const args = decoded.args as unknown as Record<string, unknown>
+          const owner = ownerInDecoded(args)
+          lastEventTime = new Date().toISOString()
+          const current = await active()
+          const relevant = current.filter((guard) => owner !== null && guard.owner.toLowerCase() === owner.toLowerCase())
+          console.log(`DECODED event=${decoded.eventName} owner=${owner ?? 'none'} relevantGuards=${relevant.length} topics=${json(payload.topics)} args=${json(args)}`)
+          for (const guard of relevant) await evaluate(guard, `event:${decoded.eventName}`)
+        } catch (error) {
+          console.error(`Reactivity event handling failed: ${text(error)}`)
+        }
       },
       onError: (error) => {
         console.error(`Reactivity watch error: ${text(error)}`)

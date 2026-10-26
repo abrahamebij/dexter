@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "guardian": "tsx server/guardian.ts"
+    "guardian": "tsx server/guardian.ts",
+    "typecheck:server": "tsc -p server/tsconfig.json"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",

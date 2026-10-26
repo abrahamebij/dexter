@@ -5,6 +5,9 @@ import { verifyAuth, nonceFor } from './auth.js'
 import { allowCompile, assertRule } from './rules.js'
 import { compileRule, validateManualRule } from './compiler.js'
 import { botAccountFromEnv, guards, mutateGuards, readEvents, updateGuard, marketName } from './storage.js'
+function isBotAddress(owner: string): boolean {
+  try { return botAccountFromEnv().toLowerCase() === owner.toLowerCase() } catch { return false }
+}
 export async function handleHttp(
   request: IncomingMessage,
   response: ServerResponse,
@@ -97,6 +100,7 @@ export async function handleHttp(
     if (request.method === 'POST' && url.pathname === '/api/guards/validate') {
       const body = await parseJsonBody(request) as Record<string, unknown>
       if (typeof body.owner !== 'string' || !body.rule || typeof body.rule !== 'object') throw badRequest('validate requires owner and rule')
+      if (isBotAddress(body.owner)) throw badRequest('owner must be your DreamDEX wallet, not the bot address')
       const result = await validateManualRule(body.rule, getAddress(body.owner), markets, client)
       response.end(JSON.stringify({ ...result, source: 'manual' }))
       return
@@ -105,6 +109,7 @@ export async function handleHttp(
       const body = await parseJsonBody(request) as Record<string, unknown>
       if (typeof body.text !== 'string' || typeof body.owner !== 'string') throw badRequest('compile requires text and owner')
       const owner = getAddress(body.owner)
+      if (isBotAddress(owner)) throw badRequest('owner must be your DreamDEX wallet, not the bot address')
       allowCompile(owner)
       const result = await compileRule(body.text, owner, markets, client)
       response.end(JSON.stringify(result))
@@ -113,6 +118,7 @@ export async function handleHttp(
     if (request.method === 'POST' && url.pathname === '/api/guards') {
       const body = await parseJsonBody(request) as Record<string, unknown>
       const owner = await verifyAuth(request, publicClient, client, body.owner)
+      if (isBotAddress(owner)) throw badRequest('owner must be your DreamDEX wallet, not the bot address')
       if (typeof body.market !== 'string') throw badRequest('market is required')
       const rule = assertRule({ market: body.market, trigger: body.trigger, action: body.action, cooldownSeconds: body.cooldownSeconds ?? 300 }, markets.flatMap((market) => [marketName(market), ...(market.baseSymbol ? [market.baseSymbol] : [])]))
       const guard: Guard = { id: crypto.randomUUID(), owner, market: rule.market, trigger: rule.trigger, action: rule.action, cooldownSeconds: rule.cooldownSeconds, status: 'active', createdAt: new Date().toISOString(), lastTriggeredAt: null, source: body.source === 'manual' ? 'manual' : 'ai' }

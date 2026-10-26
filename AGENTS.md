@@ -10,7 +10,7 @@ Dexter is a position guardian for dreamDEX perps on Somnia Tokyo testnet. A guar
 - Do NOT redeploy or change contracts.
 - Secrets (bot private key, Gemini API key) live only in server/.env. Never use a VITE_ prefix for a secret. Never log secrets.
 - Never use mock or hardcoded data in the final app. Empty states are fine, fake data is not.
-- Whenever the API, SDK or docs behave differently from what is documented, stop and write a file in feedback/ using the template in feedback/TEMPLATE.md (real evidence only: tx hash, request/response, wallet address, SDK version 0.32.1, network Somnia Tokyo testnet). Never put a security vulnerability in the repo.
+- Feedback files: write one in feedback/ only when the SDK, API or docs contradict their own documentation or are clearly defective, using feedback/TEMPLATE.md with real evidence (tx hash, request/response, wallet address, SDK version 0.32.1, network Somnia Tokyo testnet). Never write one for our own config mistakes (missing env variables, wrong key format) or expected states such as insufficient collateral. Never create or commit feedback files automatically; Abraham reviews each one. Never put a security vulnerability in the repo.
 - UI rule: one primary color only (the one already defined in src/index.css). No secondary or tertiary accent colors. Danger, warning and success colors appear only when a state truly needs them. No purple gradients, no generic 3D blobs, no excessive rounded cards, no glassmorphism unless already in the existing design.
 
 ## Verified constants (Somnia Tokyo testnet, Hideki chain)

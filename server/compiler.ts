@@ -24,6 +24,49 @@ async function readCompileCache(): Promise<Record<string, { rule: CompiledRule; 
 async function writeCompileCache(cache: Record<string, { rule: CompiledRule; model: string }>): Promise<void> {
   await writeFile(COMPILE_CACHE_FILE, `${JSON.stringify(cache, null, 2)}\n`, 'utf8')
 }
+// The LLM may invent numbers the user never wrote. Compare the validated rule with the user's text
+// deterministically, override an invented cooldown with the 300-second default, and list every value
+// the user did not state so the confirmation card can show them as assumptions.
+const DEFAULT_COOLDOWN_SECONDS = 300
+function numbersIn(textInput: string): number[] {
+  const values: number[] = []
+  for (const match of textInput.matchAll(/(\d[\d,]*(?:\.\d+)?)\s*(k)?(?![\w])/gi)) {
+    const value = Number(match[1].replace(/,/g, ''))
+    if (Number.isFinite(value)) values.push(match[2] ? value * 1_000 : value)
+  }
+  return values
+}
+export function applyStatedValues(rule: CompiledRule, textInput: string): { rule: CompiledRule; assumptions: string[] } {
+  const text = textInput.toLowerCase()
+  const numbers = numbersIn(text)
+  const assumptions: string[] = []
+  const next: CompiledRule = { ...rule }
+
+  const cooldown = text.match(/(\d+(?:\.\d+)?)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b/)
+  if (cooldown) {
+    const unit = cooldown[2]
+    const factor = unit.startsWith('h') ? 3_600 : unit.startsWith('m') ? 60 : 1
+    next.cooldownSeconds = Math.round(Number(cooldown[1]) * factor)
+  } else {
+    next.cooldownSeconds = DEFAULT_COOLDOWN_SECONDS
+    assumptions.push(`Cooldown: ${DEFAULT_COOLDOWN_SECONDS} seconds (you did not state one)`)
+  }
+
+  if (rule.trigger.type === 'liquidation_distance_pct' && !numbers.includes(rule.trigger.thresholdPct)) {
+    assumptions.push(`Liquidation distance threshold: ${rule.trigger.thresholdPct}% (you did not state one)`)
+  }
+  if (rule.trigger.type === 'mark_price' && !numbers.includes(rule.trigger.price)) {
+    assumptions.push(`Trigger price: ${rule.trigger.price} (this number is not in your text, check it)`)
+  }
+  if (rule.action.type === 'partial_close') {
+    const word = /three[- ]quarters/.test(text) ? 75 : /\bhalf\b/.test(text) ? 50 : /\bquarter\b/.test(text) ? 25 : /\b(all|everything|entire|whole|fully)\b/.test(text) ? 100 : null
+    if (!numbers.includes(rule.action.closePct) && word !== rule.action.closePct) {
+      assumptions.push(`Close size: ${rule.action.closePct}% of the position (you did not state one)`)
+    }
+  }
+  return { rule: next, assumptions }
+}
+
 export async function compileRule(textInput: string, owner: Address, markets: PerpMarket[], client: ProofClient): Promise<CompileResult> {
   const normalized = textInput.toLowerCase()
   if (/\bstop[- ]loss\b|\btake[- ]profit\b/.test(normalized)) {
@@ -38,10 +81,11 @@ export async function compileRule(textInput: string, owner: Address, markets: Pe
   const resolveResult = async (rule: CompiledRule, model: string, source: 'gemini' | 'cache', keyUsed?: 'primary' | 'fallback'): Promise<CompileResult> => {
     const selectedMarket = markets.find((market) => marketName(market) === rule.market || market.baseSymbol === rule.market)
     if (!selectedMarket) throw badRequest('compiled market is not available')
-    const canonicalRule = { ...rule, market: marketName(selectedMarket) }
+    const stated = applyStatedValues({ ...rule, market: marketName(selectedMarket) }, textInput)
+    const canonicalRule = stated.rule
     const hasPosition = await currentPositionExists(client, owner, selectedMarket)
     const warning = !hasPosition ? 'No open position in this market right now. The guard will wait.' : undefined
-    const assumptions = [`Uses the live ${canonicalRule.market} market definition.`]
+    const assumptions = [...stated.assumptions, `Uses the live ${canonicalRule.market} market definition.`]
     if (!hasPosition) assumptions.push('This owner currently has no open position in this market.')
     return { rule: canonicalRule, restatement: restate(canonicalRule), assumptions, ...(warning ? { warning } : {}), model, docsUrl: GEMINI_DOCS_URL, source, ...(keyUsed ? { keyUsed } : {}) }
   }
@@ -62,9 +106,9 @@ export async function compileRule(textInput: string, owner: Address, markets: Pe
     required: ['market', 'trigger', 'action', 'cooldownSeconds'],
   }
   const requestBody = JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: `Compile this user request into exactly one supported guard rule: "${textInput}". Owner: ${owner}. Allowed markets only: ${marketNames.join(', ')}. Supported triggers are liquidation_distance_pct with thresholdPct, or mark_price with direction below/above and price. Supported actions are notify_only or partial_close with closePct 25, 50, 75, or 100. Reject ambiguous requests and unsupported stop-loss/take-profit/price-based close semantics. Return JSON only.` }] }],
-      generationConfig: { temperature: 0.1, responseMimeType: 'application/json', responseSchema: schema },
-    })
+    contents: [{ role: 'user', parts: [{ text: `Compile this user request into exactly one supported guard rule: "${textInput}". Owner: ${owner}. Allowed markets only: ${marketNames.join(', ')}. Supported triggers are liquidation_distance_pct with thresholdPct, or mark_price with direction below/above and price. Supported actions are notify_only or partial_close with closePct 25, 50, 75, or 100. Reject ambiguous requests and unsupported stop-loss/take-profit/price-based close semantics. Return JSON only.` }] }],
+    generationConfig: { temperature: 0.1, responseMimeType: 'application/json', responseSchema: schema },
+  })
   async function requestWithKey(key: string, attempts: number): Promise<{ response: Response; keyUsed: 'primary' | 'fallback'; status?: number }> {
     const keyUsed = key === primaryKey ? 'primary' : 'fallback'
     let lastError: unknown
