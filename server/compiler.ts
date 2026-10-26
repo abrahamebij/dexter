@@ -6,6 +6,10 @@ import { marketName } from './storage.js'
 
 let fallbackPreferredUntil = 0
 export type CompileResult = { rule: CompiledRule; restatement: string; warning?: string; assumptions: string[]; model: string; docsUrl: string; source: 'gemini' | 'cache' | 'manual'; keyUsed?: 'primary' | 'fallback' }
+function providerError(status: number, body: string): Error {
+  const detail = body.trim() || 'The provider returned an empty error response.'
+  return new Error(`Gemini request failed (HTTP ${status}): ${detail}`)
+}
 function compileCacheKey(textInput: string, markets: PerpMarket[]): string {
   const normalized = textInput.trim().toLowerCase().replace(/\s+/g, ' ')
   const symbols = markets.map(marketName).sort().join('|')
@@ -109,15 +113,16 @@ export async function compileRule(textInput: string, owner: Address, markets: Pe
     contents: [{ role: 'user', parts: [{ text: `Compile this user request into exactly one supported guard rule: "${textInput}". Owner: ${owner}. Allowed markets only: ${marketNames.join(', ')}. Supported triggers are liquidation_distance_pct with thresholdPct, or mark_price with direction below/above and price. Supported actions are notify_only or partial_close with closePct 25, 50, 75, or 100. Reject ambiguous requests and unsupported stop-loss/take-profit/price-based close semantics. Return JSON only.` }] }],
     generationConfig: { temperature: 0.1, responseMimeType: 'application/json', responseSchema: schema },
   })
-  async function requestWithKey(key: string, attempts: number): Promise<{ response: Response; keyUsed: 'primary' | 'fallback'; status?: number }> {
+  async function requestWithKey(key: string, attempts: number): Promise<{ response: Response; body: string; keyUsed: 'primary' | 'fallback' }> {
     const keyUsed = key === primaryKey ? 'primary' : 'fallback'
     let lastError: unknown
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, attempt === 1 ? 2_000 : 5_000))
       try {
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: requestBody })
-        if (response.ok || ![429, 503].includes(response.status)) return { response, keyUsed }
-        lastError = new Error(`HTTP ${response.status}`)
+        const body = await response.text()
+        if (response.ok || ![429, 503].includes(response.status)) return { response, body, keyUsed }
+        lastError = providerError(response.status, body)
         if (response.status === 429 && keyUsed === 'primary') fallbackPreferredUntil = Date.now() + 10 * 60_000
       } catch (error) { lastError = error }
     }
@@ -128,19 +133,24 @@ export async function compileRule(textInput: string, owner: Address, markets: Pe
   try {
     result = preferredFallback ? await requestWithKey(fallbackKey, 1) : await requestWithKey(primaryKey, 3)
   } catch (error) {
-    if (!fallbackKey) throw new Error('Gemini is temporarily unavailable. Try again shortly or use the manual rule builder.', { cause: error })
+    if (!fallbackKey) throw error
     try {
       result = preferredFallback ? await requestWithKey(primaryKey, 3) : await requestWithKey(fallbackKey, 1)
-    } catch {
-      throw new Error('Gemini is temporarily unavailable. Try again shortly or use the manual rule builder.')
+    } catch (fallbackError) {
+      throw new Error(`Gemini primary request failed: ${error instanceof Error ? error.message : String(error)}; fallback request failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`)
     }
   }
-  if (!result.response.ok) throw new Error(`Gemini request failed with HTTP ${result.response.status}; try again shortly or use the manual rule builder.`)
-  const payload = await result.response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }
+  if (!result.response.ok) throw providerError(result.response.status, result.body)
+  let payload: { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }
+  try {
+    payload = JSON.parse(result.body) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }
+  } catch {
+    throw new Error(`Gemini returned an invalid response body (HTTP ${result.response.status}): ${result.body}`)
+  }
   const output = payload.candidates?.[0]?.content?.parts?.[0]?.text
-  if (!output) throw new Error('Gemini returned no rule')
+  if (!output) throw new Error(`Gemini returned no rule. Raw response: ${result.body}`)
   let parsed: unknown
-  try { parsed = JSON.parse(output) } catch { throw badRequest('Gemini returned invalid structured JSON') }
+  try { parsed = JSON.parse(output) } catch { throw new Error(`Gemini returned invalid structured JSON. Raw model output: ${output}`) }
   const rule = assertRule(parsed, marketNames)
   const cacheKey = compileCacheKey(textInput, markets)
   const resolved = await resolveResult(rule, model, 'gemini', result.keyUsed)
